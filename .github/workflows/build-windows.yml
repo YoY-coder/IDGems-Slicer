@@ -1,0 +1,43 @@
+# Compilation automatique du plugin sur un serveur Windows de GitHub.
+# Resultat telechargeable dans l'onglet "Actions" > derniere execution > "Artifacts".
+name: Build Windows
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-8.0.15-${{ runner.os }}
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Rassembler le plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path Plugin | Out-Null
+          Copy-Item -Recurse -Force "build/IDGemsSlicer_artefacts/Release/VST3/IDGems Slicer.vst3" "Plugin/"
+          Copy-Item -Force "build/IDGemsSlicer_artefacts/Release/Standalone/IDGems Slicer.exe" "Plugin/"
+          Get-ChildItem -Recurse Plugin | Select-Object FullName, Length
+
+      - name: Publier le plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: IDGems-Slicer-Windows
+          path: Plugin/
+          if-no-files-found: error
