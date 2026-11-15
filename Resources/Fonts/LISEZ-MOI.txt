@@ -1,0 +1,7 @@
+Deposez ici le fichier de votre police (.ttf ou .otf), par exemple
+"AlteredBrother.ttf", puis relancez build.bat.
+
+- La police est embarquee DANS le plugin : rien a installer ailleurs.
+- Un seul fichier est utilise (le premier trouve, ordre alphabetique).
+- Elle sert aux titres. Les valeurs chiffrees restent en police mono
+  pour la lisibilite.

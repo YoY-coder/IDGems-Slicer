@@ -167,7 +167,7 @@ void MainView::drawPlaceholder (juce::Graphics& g, juce::Rectangle<int> area,
     g.fillRect (a.getX(), a.getBottom() - 2.0f, juce::jmin (60.0f, a.getWidth()), 2.0f);
 
     auto t = area.reduced (12, 8);
-    g.setFont (IDGemsLookAndFeel::monoFont (14.0f).boldened());
+    g.setFont (IDGemsLookAndFeel::titleFont (15.0f));
     g.setColour (accent);
     g.drawText (title, t.removeFromTop (20), juce::Justification::centredLeft);
     g.setFont (IDGemsLookAndFeel::monoFont (12.0f));
@@ -177,7 +177,7 @@ void MainView::drawPlaceholder (juce::Graphics& g, juce::Rectangle<int> area,
 
 void MainView::drawGlitchTitle (juce::Graphics& g, juce::Rectangle<float> area)
 {
-    auto font = IDGemsLookAndFeel::monoFont (40.0f).boldened();
+    auto font = IDGemsLookAndFeel::titleFont (40.0f);
     g.setFont (font);
 
     auto textArea = area.withTrimmedLeft (4.0f).withTrimmedBottom (10.0f);

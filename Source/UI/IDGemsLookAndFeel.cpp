@@ -1,6 +1,51 @@
 #include "IDGemsLookAndFeel.h"
 #include "Theme.h"
 
+#if IDGEMS_HAS_CUSTOM_FONT
+ #include "BinaryData.h"
+#endif
+
+namespace
+{
+    juce::Typeface::Ptr loadCustomTitleTypeface()
+    {
+       #if IDGEMS_HAS_CUSTOM_FONT
+        for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+        {
+            const auto* name = BinaryData::namedResourceList[i];
+            const juce::String file (BinaryData::getNamedResourceOriginalFilename (name));
+            if (file.endsWithIgnoreCase (".ttf") || file.endsWithIgnoreCase (".otf"))
+            {
+                int size = 0;
+                if (const auto* data = BinaryData::getNamedResource (name, size))
+                    if (auto tf = juce::Typeface::createSystemTypefaceFor (data, (size_t) size))
+                        return tf;
+            }
+        }
+       #endif
+        return nullptr;
+    }
+
+    juce::Typeface::Ptr getCustomTitleTypeface()
+    {
+        static juce::Typeface::Ptr tf = loadCustomTitleTypeface();   // charge une seule fois
+        return tf;
+    }
+}
+
+bool IDGemsLookAndFeel::hasCustomTitleFont()
+{
+    return getCustomTitleTypeface() != nullptr;
+}
+
+juce::Font IDGemsLookAndFeel::titleFont (float height)
+{
+    if (auto tf = getCustomTitleTypeface())
+        return juce::Font (juce::FontOptions (tf).withHeight (height));
+
+    return monoFont (height).boldened();
+}
+
 IDGemsLookAndFeel::IDGemsLookAndFeel()
 {
     setColour (juce::ResizableWindow::backgroundColourId, Theme::background);

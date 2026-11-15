@@ -20,4 +20,9 @@ public:
     juce::Font getLabelFont (juce::Label&) override;
 
     static juce::Font monoFont (float height);
+
+    // Police d'affichage IDGems (titres). Utilise la police deposee dans
+    // Resources/Fonts si elle existe, sinon la police mono en gras.
+    static juce::Font titleFont (float height);
+    static bool hasCustomTitleFont();
 };

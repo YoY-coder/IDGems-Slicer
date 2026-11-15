@@ -49,6 +49,23 @@ target_sources(IDGemsSlicer
 
 target_include_directories(IDGemsSlicer PRIVATE Source)
 
+# --- Police personnalisee (optionnelle) ----------------------------------------
+# Deposez un fichier .ttf ou .otf dans Resources/Fonts : il est embarque dans le
+# plugin (rien a installer sur la machine). Sans fichier, police mono par defaut.
+file(GLOB IDGEMS_FONT_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts/*.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts/*.otf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts/*.TTF"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts/*.OTF")
+if(IDGEMS_FONT_FILES)
+    message(STATUS "IDGems : police personnalisee trouvee : ${IDGEMS_FONT_FILES}")
+    juce_add_binary_data(IDGemsFonts SOURCES ${IDGEMS_FONT_FILES})
+    target_link_libraries(IDGemsSlicer PRIVATE IDGemsFonts)
+    target_compile_definitions(IDGemsSlicer PRIVATE IDGEMS_HAS_CUSTOM_FONT=1)
+else()
+    message(STATUS "IDGems : aucune police dans Resources/Fonts (police par defaut)")
+endif()
+
 target_compile_definitions(IDGemsSlicer
     PUBLIC
         JUCE_WEB_BROWSER=0

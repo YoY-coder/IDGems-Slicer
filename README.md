@@ -54,3 +54,4 @@ S'il y a `=== ECHEC ===`, copiez tout le texte de la fenêtre et envoyez-le-moi.
 | `Source/UI/MainView.*` | Interface principale (dessinée en 1280×800 puis mise à l'échelle) |
 | `Source/UI/Theme.h` | Couleurs IDGems + couleurs des 4 samples |
 | `Source/UI/IDGemsLookAndFeel.*` | Style des contrôles |
+| `Resources/Fonts/` | Votre police (.ttf / .otf) pour les titres, embarquée dans le plugin |
