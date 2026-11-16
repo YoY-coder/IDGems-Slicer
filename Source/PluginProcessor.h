@@ -2,13 +2,15 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "Engine/SampleManager.h"
+#include "Engine/VoiceEngine.h"
+#include "Engine/Router.h"
 
 //==============================================================================
 // IDGems Slicer - moteur audio.
 //
-// ETAPE 1 : squelette. Le moteur contient seulement un petit synthe sinus de
-// test pour verifier que le MIDI entre et que l'audio sort. Il sera remplace
-// par le vrai moteur de slices a l'etape 2.
+// ETAPES 2-3 : 4 emplacements de samples decoupes, aiguillage par
+// probabilite, Mode Clavier (une slice par touche).
 //
 // Regles audio (valables pour toutes les etapes) :
 //  - aucune allocation memoire / aucun acces disque dans processBlock()
@@ -65,6 +67,24 @@ public:
     // Activite MIDI (clignotant dans l'interface)
     std::atomic<int> midiActivityCounter { 0 };
 
+    //== Samples / moteur ======================================================
+    idg::SampleManager& getSampleManager() noexcept { return sampleManager; }
+    const idg::VoiceEngine& getVoiceEngine() const noexcept { return engine; }
+
+    // Pre-ecoute d'une slice (appele depuis l'interface)
+    void requestPreview (int slot, int slice);
+
+    // Probabilites brutes (0..1) lues dans les parametres
+    std::array<float, idg::numSlots> getProbabilities() const noexcept;
+
+    // Dernier declenchement (pour l'affichage)
+    std::atomic<int> lastTriggerSlot { -1 }, lastTriggerSlice { -1 }, triggerCounter { 0 };
+
+    double getHostBpm() const noexcept { return hostBpm.load(); }
+
+    int getSelectedSlot() const;
+    void setSelectedSlot (int);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -72,7 +92,32 @@ private:
     std::atomic<float>* outputGainDb = nullptr;
     juce::SmoothedValue<float> outputGain;
 
-    juce::Synthesiser testSynth;   // ETAPE 1 seulement
+    void handleMidi (const juce::MidiMessage&);
+    void triggerSlice (int slot, int slice, int note, float velocity, bool forceOneShot);
+
+    std::atomic<double> hostBpm { 120.0 };
+    idg::SampleManager sampleManager { [this] { return hostBpm.load(); } };
+    idg::VoiceEngine engine;
+    idg::Router router;
+    std::array<idg::SampleData::Ptr, idg::numSlots> audioSlots;   // cache du thread audio
+
+    double currentSampleRate = 44100.0;
+
+    // Parametres
+    std::array<std::atomic<float>*, idg::numSlots> probParams {};
+    std::atomic<float>* noRepeatParam = nullptr;
+    std::atomic<float>* keySourceParam = nullptr;
+    std::atomic<float>* rootNoteParam = nullptr;
+    std::atomic<float>* polyphonyParam = nullptr;
+    std::atomic<float>* transposeParam = nullptr;
+    std::atomic<float>* oneShotParam = nullptr;
+    std::atomic<float>* fadeParam = nullptr;
+    std::atomic<float>* normalizeParam = nullptr;
+
+    // File de pre-ecoute (interface -> audio), sans allocation
+    struct PreviewRequest { int slot, slice; };
+    juce::AbstractFifo previewFifo { 32 };
+    std::array<PreviewRequest, 32> previewQueue {};
 
     std::array<std::atomic<float>, 2> outputLevel {};
 

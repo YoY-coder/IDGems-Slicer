@@ -45,7 +45,14 @@ target_sources(IDGemsSlicer
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/UI/IDGemsLookAndFeel.cpp
-        Source/UI/MainView.cpp)
+        Source/UI/MainView.cpp
+        Source/UI/WaveformView.cpp
+        Source/UI/SlotPanel.cpp
+        Source/UI/SliceEditor.cpp
+        Source/UI/PlayPanel.cpp
+        Source/Engine/Slicer.cpp
+        Source/Engine/SampleManager.cpp
+        Source/Engine/VoiceEngine.cpp)
 
 target_include_directories(IDGemsSlicer PRIVATE Source)
 
@@ -82,3 +89,13 @@ target_link_libraries(IDGemsSlicer
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+# --- Tests automatiques (optionnels) ------------------------------------------
+option(IDGEMS_BUILD_TESTS "Compiler le programme de tests" OFF)
+if(IDGEMS_BUILD_TESTS)
+    add_executable(IDGemsSlicerTests Tests/TestMain.cpp)
+    target_compile_definitions(IDGemsSlicerTests PRIVATE $<TARGET_PROPERTY:IDGemsSlicer,COMPILE_DEFINITIONS>)
+    target_include_directories(IDGemsSlicerTests PRIVATE $<TARGET_PROPERTY:IDGemsSlicer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(IDGemsSlicerTests PRIVATE JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
+    target_link_libraries(IDGemsSlicerTests PRIVATE IDGemsSlicer)
+endif()

@@ -1,6 +1,6 @@
 # Compilation automatique du plugin sur un serveur Windows de GitHub.
 # Resultat telechargeable dans l'onglet "Actions" > derniere execution > "Artifacts".
-name: Build Windows
+name: Build
 
 on:
   push:
@@ -41,3 +41,37 @@ jobs:
           name: IDGems-Slicer-Windows
           path: Plugin/
           if-no-files-found: error
+
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependances
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-8.0.15-${{ runner.os }}
+
+      - name: Build tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DIDGEMS_BUILD_TESTS=ON
+          cmake --build build --target IDGemsSlicerTests --parallel
+
+      - name: Run tests
+        run: xvfb-run -a ./build/IDGemsSlicerTests --snapshot interface.png
+
+      - name: Capture de l'interface
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-interface
+          path: interface.png
+          if-no-files-found: ignore

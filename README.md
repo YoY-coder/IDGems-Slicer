@@ -3,8 +3,21 @@
 Plugin instrument VST3 (MIDI → audio) de la famille IDGems : découpe de gros bounces de sound design
 en slices, jouées et séquencées au MIDI avec beaucoup de random.
 
-**État actuel : étape 1 / 10 — squelette** (compile, se charge dans Ableton, interface vide redimensionnable,
-petit son de test sinus sur les notes MIDI).
+**État actuel : étapes 1 à 3 / 10**
+- 4 emplacements de samples (glisser-déposer ou bouton CHARGER), chacun avec sa couleur.
+- Découpe : transitoires (sensibilité), grille calée sur le tempo (1/4 à 1/64), parts égales,
+  aléatoire (bouton RE-SLICE RANDOM), manuel (marqueurs à la souris). 16 à 256 slices.
+- Anti-clic réglable, normalisation optionnelle par slice.
+- Mode Clavier : une slice par touche à partir de la note racine (C1 par défaut).
+- Aiguillage : à chaque note, tirage au sort du sample selon les 4 probabilités
+  (normalisées, emplacements vides ignorés), option « pas de répétition », ou source forcée.
+- Tout est sauvegardé avec le projet Ableton (chemins des fichiers + slices exactes + réglages).
+
+## Compilation automatique (sans rien installer)
+Chaque envoi de code sur GitHub compile le plugin Windows et lance les tests automatiques.
+Onglet **Actions** → dernière exécution « Build » → en bas, **Artifacts** :
+- `IDGems-Slicer-Windows` : le plugin (`.vst3`) + la version autonome (`.exe`)
+- `capture-interface` : une capture de l'interface générée par les tests
 
 ---
 
@@ -54,4 +67,12 @@ S'il y a `=== ECHEC ===`, copiez tout le texte de la fenêtre et envoyez-le-moi.
 | `Source/UI/MainView.*` | Interface principale (dessinée en 1280×800 puis mise à l'échelle) |
 | `Source/UI/Theme.h` | Couleurs IDGems + couleurs des 4 samples |
 | `Source/UI/IDGemsLookAndFeel.*` | Style des contrôles |
+| `Source/UI/SlotPanel.*` | Carte d'un emplacement de sample |
+| `Source/UI/SliceEditor.*`, `WaveformView.*` | Éditeur de découpe, forme d'onde |
+| `Source/UI/PlayPanel.*` | Réglages de jeu et aiguillage |
+| `Source/Engine/SampleManager.*` | Chargement (en arrière-plan) et découpe des 4 samples |
+| `Source/Engine/Slicer.*` | Algorithmes de découpe |
+| `Source/Engine/VoiceEngine.*` | Lecture des slices (voix pré-allouées, anti-clic) |
+| `Source/Engine/Router.h` | Aiguillage par probabilité |
+| `Tests/TestMain.cpp` | Tests automatiques du moteur |
 | `Resources/Fonts/` | Votre police (.ttf / .otf) pour les titres, embarquée dans le plugin |

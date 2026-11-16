@@ -2,6 +2,9 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "SlotPanel.h"
+#include "SliceEditor.h"
+#include "PlayPanel.h"
 
 class IDGemsSlicerProcessor;
 
@@ -11,7 +14,8 @@ class IDGemsSlicerProcessor;
 // (vectoriel) quelle que soit la taille de la fenetre.
 //==============================================================================
 class MainView final : public juce::Component,
-                       private juce::Timer
+                       private juce::Timer,
+                       private juce::ChangeListener
 {
 public:
     explicit MainView (IDGemsSlicerProcessor&);
@@ -22,6 +26,8 @@ public:
 
 private:
     void timerCallback() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void selectSlot (int);
     void drawGlitchTitle (juce::Graphics&, juce::Rectangle<float> area);
     void drawPlaceholder (juce::Graphics&, juce::Rectangle<int> area,
                           const juce::String& title, const juce::String& note,
@@ -36,6 +42,10 @@ private:
     juce::Slider outputGain { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
     juce::Label  outputGainLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputGainAttachment;
+
+    std::array<std::unique_ptr<SlotPanel>, 4> slotPanels;
+    SliceEditor sliceEditor;
+    PlayPanel playPanel;
 
     // Zones (coordonnees de reference)
     juce::Rectangle<int> headerArea, slotsArea, mapArea, fxArea, seqArea, meterArea, midiLedArea;

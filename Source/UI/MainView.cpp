@@ -3,8 +3,19 @@
 #include "IDGemsLookAndFeel.h"
 #include "../PluginProcessor.h"
 
-MainView::MainView (IDGemsSlicerProcessor& p) : processor (p)
+MainView::MainView (IDGemsSlicerProcessor& p)
+    : processor (p), sliceEditor (p), playPanel (p)
 {
+    for (int i = 0; i < 4; ++i)
+    {
+        slotPanels[(size_t) i] = std::make_unique<SlotPanel> (processor, i);
+        slotPanels[(size_t) i]->onSelect = [this] (int s) { selectSlot (s); };
+        addAndMakeVisible (*slotPanels[(size_t) i]);
+    }
+    addAndMakeVisible (sliceEditor);
+    addAndMakeVisible (playPanel);
+    processor.getSampleManager().addChangeListener (this);
+
     setSize (IDGemsSlicerProcessor::baseWidth, IDGemsSlicerProcessor::baseHeight);
     setOpaque (true);
 
@@ -24,12 +35,29 @@ MainView::MainView (IDGemsSlicerProcessor& p) : processor (p)
     addAndMakeVisible (outputGainLabel);
 
     buildTexture();
+    selectSlot (processor.getSelectedSlot());
+    timerCallback();   // premier affichage complet
     startTimerHz (30);
 }
 
 MainView::~MainView()
 {
     stopTimer();
+    processor.getSampleManager().removeChangeListener (this);
+}
+
+void MainView::selectSlot (int s)
+{
+    processor.setSelectedSlot (s);
+    for (int i = 0; i < 4; ++i)
+        slotPanels[(size_t) i]->setSelected (i == s);
+    sliceEditor.setSlot (s);
+}
+
+void MainView::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    for (auto& sp : slotPanels) sp->refresh();
+    sliceEditor.refresh();
 }
 
 //==============================================================================
@@ -74,12 +102,24 @@ void MainView::resized()
     slotsArea = r.removeFromTop (150);
     r.removeFromTop (12);
 
-    seqArea = r.removeFromBottom (230);
+    seqArea = r.removeFromBottom (170);
     r.removeFromBottom (12);
 
     fxArea = r.removeFromRight (360);
     r.removeFromRight (12);
     mapArea = r;
+
+    {
+        auto slots = slotsArea;
+        const int w = (slots.getWidth() - 3 * 12) / 4;
+        for (int i = 0; i < 4; ++i)
+        {
+            slotPanels[(size_t) i]->setBounds (slots.removeFromLeft (w));
+            slots.removeFromLeft (12);
+        }
+    }
+    sliceEditor.setBounds (mapArea);
+    playPanel.setBounds (fxArea);
 
     // En-tete : volume + vu-metre a droite
     auto h = headerArea;
@@ -123,28 +163,7 @@ void MainView::paint (juce::Graphics& g)
 
     drawMeter (g, meterArea.toFloat());
 
-    // 4 emplacements de samples (vides pour l'instant)
-    {
-        auto slots = slotsArea;
-        const int w = (slots.getWidth() - 3 * 12) / 4;
-        for (int i = 0; i < 4; ++i)
-        {
-            auto s = slots.removeFromLeft (w);
-            slots.removeFromLeft (12);
-            drawPlaceholder (g, s, "SAMPLE " + juce::String (i + 1),
-                             "glisser un fichier ici - etape 2/3", Theme::sampleColour (i));
-        }
-    }
-
-    drawPlaceholder (g, mapArea, "CARTE DES SLICES", "etape 5", Theme::blue);
-    drawPlaceholder (g, fxArea,  "CHAINE FX IDGEMS", "etape 7", Theme::orange);
-    drawPlaceholder (g, seqArea, "SEQUENCEUR / LANES", "etape 4", Theme::orange);
-
-    // Rappel etape 1
-    g.setColour (Theme::textDim);
-    g.setFont (IDGemsLookAndFeel::monoFont (13.0f));
-    g.drawText ("ETAPE 1 : squelette - jouez des notes MIDI pour entendre un son de test",
-                mapArea.reduced (20).removeFromBottom (24), juce::Justification::centredLeft);
+    drawPlaceholder (g, seqArea, "SEQUENCEUR / LANES", "etape 4  -  Mode Scan, sequenceur polyrythmique, lane Sample", Theme::orange);
 }
 
 void MainView::drawPlaceholder (juce::Graphics& g, juce::Rectangle<int> area,
@@ -313,11 +332,19 @@ void MainView::timerCallback()
     }
 
     // Glitch du titre : pilote par le son + rares sursauts aleatoires
-    const float target = juce::jlimit (0.0f, 1.0f, juce::jmax (l, r) * 1.5f);
+    const float target = juce::jlimit (0.0f, 0.5f, juce::jmax (l, r) * 0.6f);   // reste lisible
     glitchAmount = juce::jmax (target, glitchAmount * 0.8f);
     if (rng.nextFloat() < 0.01f)
         glitchAmount = juce::jmax (glitchAmount, 0.4f);
     glitchSeed = rng.nextInt();
 
     repaint (headerArea);
+
+    // Panneaux
+    std::array<bool, 4> loaded {};
+    for (int i = 0; i < 4; ++i) loaded[(size_t) i] = processor.getSampleManager().isLoaded (i);
+    const auto probs = idg::Router::normalised (loaded, processor.getProbabilities());
+    for (int i = 0; i < 4; ++i) slotPanels[(size_t) i]->tick (probs[(size_t) i]);
+    sliceEditor.tick();
+    playPanel.tick (probs, loaded);
 }
