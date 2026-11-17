@@ -12,59 +12,133 @@ namespace
         l.setColour (juce::Label::textColourId, Theme::textDim);
         parent.addAndMakeVisible (l);
     }
+
+    void drawSectionHeader (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, juce::Colour c)
+    {
+        g.setColour (c);
+        g.setFont (IDGemsLookAndFeel::monoFont (12.0f).boldened());
+        g.drawText (text, r, juce::Justification::centredLeft);
+        const int tw = juce::GlyphArrangement::getStringWidthInt (IDGemsLookAndFeel::monoFont (12.0f).boldened(), text);
+        g.setColour (c.withAlpha (0.35f));
+        g.fillRect (r.getX() + tw + 8, r.getCentreY(), r.getWidth() - tw - 8, 1);
+    }
 }
 
 PlayPanel::PlayPanel (IDGemsSlicerProcessor& p) : processor (p)
 {
     auto& apvts = processor.getAPVTS();
 
+    setupLabel (modeLabel, "MODE", *this);
+    modeBox.addItemList ({ "Clavier", "Scan", "Accord" }, 1);
+    modeBox.setTooltip ("Clavier : une slice par touche.\n"
+                        "Scan : une seule note suffit, le SLICE SELECT choisit la slice.\n"
+                        "Accord : une note declenche plusieurs slices decalees dans le temps (meme sample).");
+    addAndMakeVisible (modeBox);
+    modeAtt = std::make_unique<ComboAtt> (apvts, "playMode", modeBox);
+
     setupLabel (sourceLabel, "SOURCE", *this);
     sourceBox.addItemList ({ "Auto (aiguillage)", "Sample 1", "Sample 2", "Sample 3", "Sample 4" }, 1);
-    sourceBox.setTooltip ("Auto : chaque note tire au sort son sample selon les probabilites.\n"
-                          "Sample N : toutes les notes jouent ce sample (si l'emplacement est vide : Auto).");
+    sourceBox.setTooltip ("Jeu direct (sequenceur coupe) :\n"
+                          "Auto : chaque note tire au sort son sample selon les probabilites.\n"
+                          "Sample N : toutes les notes jouent ce sample (si vide : Auto).\n"
+                          "Avec le sequenceur, c'est la lane SAMPLE qui decide.");
     addAndMakeVisible (sourceBox);
     sourceAtt = std::make_unique<ComboAtt> (apvts, "keySource", sourceBox);
 
-    setupLabel (rootLabel, "NOTE RACINE", *this);
-    rootSlider.setTooltip ("Touche qui joue la slice 1 (notation Ableton : C1 = note 36). "
-                           "Les touches suivantes jouent les slices suivantes, en boucle.");
-    addAndMakeVisible (rootSlider);
-    rootAtt = std::make_unique<SliderAtt> (apvts, "rootNote", rootSlider);
-    rootSlider.textFromValueFunction = [] (double v)   // apres l'attachment (qui l'ecrase)
-    {
-        return juce::MidiMessage::getMidiNoteName ((int) v, true, true, 3) + "  (" + juce::String ((int) v) + ")";
-    };
-    rootSlider.updateText();
+    auto& root = addSlider ("rootNote", "NOTE RACINE",
+                            "Clavier : touche qui joue la slice 1 (C1 = 36). Scan/Accord : note de reference du pitch.");
+    root.textFromValueFunction = [] (double v) { return juce::MidiMessage::getMidiNoteName ((int) v, true, true, 3) + "  (" + juce::String ((int) v) + ")"; };
+    root.updateText();
 
-    setupLabel (polyLabel, "POLYPHONIE", *this);
-    polySlider.setTooltip ("Nombre de slices pouvant sonner en meme temps (1 = mono)");
-    addAndMakeVisible (polySlider);
-    polyAtt = std::make_unique<SliderAtt> (apvts, "polyphony", polySlider);
-    polySlider.textFromValueFunction = [] (double v)
-    {
-        return (int) v == 1 ? juce::String ("MONO") : juce::String ((int) v) + " voix";
-    };
-    polySlider.updateText();
+    auto& poly = addSlider ("polyphony", "POLYPHONIE", "Nombre de slices pouvant sonner en meme temps (1 = mono)");
+    poly.textFromValueFunction = [] (double v) { return (int) v == 1 ? juce::String ("MONO") : juce::String ((int) v) + " voix"; };
+    poly.updateText();
 
-    setupLabel (transposeLabel, "TRANSPO", *this);
-    transposeSlider.setTextValueSuffix (" st");
-    transposeSlider.setNumDecimalPlacesToDisplay (1);
-    transposeSlider.setDoubleClickReturnValue (true, 0.0);
-    transposeSlider.setTooltip ("Transposition de toutes les slices, en demi-tons (double-clic : 0)");
-    addAndMakeVisible (transposeSlider);
-    transposeAtt = std::make_unique<SliderAtt> (apvts, "transpose", transposeSlider);
+    auto& tr = addSlider ("transpose", "TRANSPO", "Transposition de toutes les slices, en demi-tons (double-clic : 0)");
+    tr.setNumDecimalPlacesToDisplay (1);
+    tr.setDoubleClickReturnValue (true, 0.0);
 
-    oneShotToggle.setTooltip ("Active : la slice joue jusqu'au bout meme si vous relachez la touche.\n"
-                              "Desactive : la slice s'arrete au relachement.");
-    addAndMakeVisible (oneShotToggle);
-    oneShotAtt = std::make_unique<ButtonAtt> (apvts, "oneShot", oneShotToggle);
+    oneShotToggle.setTooltip ("Active : la slice joue jusqu'au bout.\nDesactive : elle s'arrete au relachement (ou a la fin du GATE du sequenceur).");
+    noRepeatToggle.setTooltip ("Interdit de piocher deux fois de suite dans le meme sample (aiguillage)");
+    pitchFollowToggle.setTooltip ("Scan / Accord : la hauteur suit la note jouee (par rapport a la NOTE RACINE). Sinon : hauteur fixe.");
+    for (auto* t : { &oneShotToggle, &noRepeatToggle, &pitchFollowToggle }) addAndMakeVisible (*t);
+    oneShotAtt     = std::make_unique<ButtonAtt> (apvts, "oneShot", oneShotToggle);
+    noRepeatAtt    = std::make_unique<ButtonAtt> (apvts, "noRepeat", noRepeatToggle);
+    pitchFollowAtt = std::make_unique<ButtonAtt> (apvts, "pitchFollow", pitchFollowToggle);
 
-    noRepeatToggle.setTooltip ("Interdit de piocher deux fois de suite dans le meme sample (mode Auto)");
-    addAndMakeVisible (noRepeatToggle);
-    noRepeatAtt = std::make_unique<ButtonAtt> (apvts, "noRepeat", noRepeatToggle);
+    // Scan
+    auto& sel = addSlider ("sliceSelect", "SLICE SELECT",
+                           "Position de lecture : 0 % = premiere slice, 100 % = derniere (dans le sample choisi par l'aiguillage). "
+                           "Automatisable dans Ableton.");
+    sel.setNumDecimalPlacesToDisplay (0);
+    addSlider ("scanRandom", "RANDOM", "Ecart aleatoire autour du Slice Select a chaque declenchement").setNumDecimalPlacesToDisplay (0);
+    addSlider ("velToScan", "VELOCITE", "La velocite deplace le Slice Select (negatif = vers le debut)").setNumDecimalPlacesToDisplay (0);
+    addSlider ("wheelToScan", "MOLETTE", "La molette de modulation deplace le Slice Select").setNumDecimalPlacesToDisplay (0);
+
+    // Accord
+    addSlider ("chordCount", "SLICES", "Nombre de slices declenchees par note (Mode Accord)");
+    auto& spread = addSlider ("chordSpread", "SPREAD", "Decalage dans le temps entre les slices de l'accord");
+    spread.setNumDecimalPlacesToDisplay (0);
+    addSlider ("chordStep", "ECART", "Ecart entre les slices de l'accord (1 = slices voisines)");
+
+    for (auto id : { "velToScan", "wheelToScan", "transpose" })
+        findRow (id)->slider->setDoubleClickReturnValue (true, 0.0);
+
+    apvts.addParameterListener ("playMode", this);
+    updateEnablement();
 }
 
-PlayPanel::~PlayPanel() = default;
+PlayPanel::~PlayPanel()
+{
+    processor.getAPVTS().removeParameterListener ("playMode", this);
+}
+
+juce::Slider& PlayPanel::addSlider (const juce::String& paramId, const juce::String& label, const juce::String& tooltip)
+{
+    auto row = std::make_unique<Row>();
+    setupLabel (row->label, label, *this);
+    row->slider = std::make_unique<juce::Slider> (juce::Slider::LinearBar, juce::Slider::TextBoxLeft);
+    row->slider->setTooltip (tooltip);
+    addAndMakeVisible (*row->slider);
+    row->attachment = std::make_unique<SliderAtt> (processor.getAPVTS(), paramId, *row->slider);
+    auto& s = *row->slider;
+    rows.emplace_back (paramId, std::move (row));
+    return s;
+}
+
+PlayPanel::Row* PlayPanel::findRow (const juce::String& id)
+{
+    for (auto& r : rows) if (r.first == id) return r.second.get();
+    return nullptr;
+}
+
+void PlayPanel::parameterChanged (const juce::String&, float)
+{
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<PlayPanel> (this)]
+    {
+        if (safe != nullptr) safe->updateEnablement();
+    });
+}
+
+void PlayPanel::updateEnablement()
+{
+    const int mode = modeBox.getSelectedItemIndex();
+    const bool scanLike = mode != 0;
+    for (auto id : { "sliceSelect", "scanRandom", "velToScan", "wheelToScan" })
+    {
+        auto* r = findRow (id);
+        r->slider->setEnabled (scanLike);
+        r->label.setEnabled (scanLike);
+        r->slider->setAlpha (scanLike ? 1.0f : 0.4f);
+    }
+    for (auto id : { "chordCount", "chordSpread", "chordStep" })
+    {
+        auto* r = findRow (id);
+        r->slider->setEnabled (mode == 2);
+        r->slider->setAlpha (mode == 2 ? 1.0f : 0.4f);
+    }
+    pitchFollowToggle.setEnabled (scanLike);
+}
 
 void PlayPanel::tick (const std::array<float, 4>& p, const std::array<bool, 4>& loaded)
 {
@@ -95,28 +169,61 @@ void PlayPanel::tick (const std::array<float, 4>& p, const std::array<bool, 4>& 
 void PlayPanel::resized()
 {
     auto r = getLocalBounds().reduced (12, 8);
-    r.removeFromTop (22 + 18 + 6);   // titre + mode
+    r.removeFromTop (26);
+    constexpr int rowH = 22, gap = 5, labelW = 96;
 
-    auto row = [&r] (juce::Label& l, juce::Component& c)
+    auto line = [&] (juce::Component& label, juce::Component& c)
     {
-        auto line = r.removeFromTop (24);
-        l.setBounds (line.removeFromLeft (100));
-        c.setBounds (line);
-        r.removeFromTop (8);
+        auto l = r.removeFromTop (rowH);
+        label.setBounds (l.removeFromLeft (labelW));
+        c.setBounds (l);
+        r.removeFromTop (gap);
     };
-    row (sourceLabel, sourceBox);
-    row (rootLabel, rootSlider);
-    row (polyLabel, polySlider);
-    row (transposeLabel, transposeSlider);
+    auto sliderLine = [&] (const char* id) { auto* row = findRow (id); line (row->label, *row->slider); };
+    auto halfLine = [&] (const char* idA, const char* idB)
+    {
+        auto l = r.removeFromTop (rowH);
+        auto left = l.removeFromLeft (l.getWidth() / 2 - 4);
+        l.removeFromLeft (8);
+        auto* a = findRow (idA);
+        auto* b = findRow (idB);
+        a->label.setBounds (left.removeFromLeft (64));
+        a->slider->setBounds (left);
+        b->label.setBounds (l.removeFromLeft (56));
+        b->slider->setBounds (l);
+        r.removeFromTop (gap);
+    };
 
-    auto toggles = r.removeFromTop (24);
-    oneShotToggle.setBounds (toggles.removeFromLeft (120));
-    noRepeatToggle.setBounds (toggles);
-    r.removeFromTop (16);
+    line (modeLabel, modeBox);
+    line (sourceLabel, sourceBox);
+    sliderLine ("rootNote");
+    sliderLine ("polyphony");
+    sliderLine ("transpose");
 
-    distributionArea = r.removeFromTop (54);
-    r.removeFromTop (10);
-    lastTriggerArea = r.removeFromTop (40);
+    {
+        auto l = r.removeFromTop (rowH);
+        oneShotToggle.setBounds (l.removeFromLeft (120));
+        noRepeatToggle.setBounds (l);
+        r.removeFromTop (2);
+        pitchFollowToggle.setBounds (r.removeFromTop (rowH));
+        r.removeFromTop (gap + 2);
+    }
+
+    scanHeader = r.removeFromTop (16);
+    r.removeFromTop (4);
+    sliderLine ("sliceSelect");
+    sliderLine ("scanRandom");
+    halfLine ("velToScan", "wheelToScan");
+
+    chordHeader = r.removeFromTop (16);
+    r.removeFromTop (4);
+    halfLine ("chordCount", "chordStep");
+    sliderLine ("chordSpread");
+
+    r.removeFromTop (4);
+    distributionArea = r.removeFromTop (42);
+    r.removeFromTop (4);
+    lastTriggerArea = r.removeFromTop (36);
 }
 
 void PlayPanel::paint (juce::Graphics& g)
@@ -139,9 +246,11 @@ void PlayPanel::paint (juce::Graphics& g)
     g.setFont (IDGemsLookAndFeel::titleFont (15.0f));
     g.setColour (Theme::orange);
     g.drawText ("JEU  //  AIGUILLAGE", r.removeFromTop (20), juce::Justification::centredLeft);
+
+    drawSectionHeader (g, scanHeader, "SCAN", Theme::blue);
+    drawSectionHeader (g, chordHeader, "ACCORD", Theme::blue);
+
     g.setFont (IDGemsLookAndFeel::monoFont (12.0f));
-    g.setColour (Theme::textDim);
-    g.drawText ("MODE : CLAVIER  (Scan / Accord : etape 4)", r.removeFromTop (20), juce::Justification::centredLeft);
 
     // Repartition reelle des probabilites
     {
@@ -183,7 +292,7 @@ void PlayPanel::paint (juce::Graphics& g)
         if (s >= 0)
         {
             const auto c = Theme::sampleColour (s);
-            auto box = t.removeFromLeft (24).reduced (4.0f);
+            auto box = t.removeFromLeft (20).reduced (3.0f);
             g.setColour (c.withAlpha (0.3f + 0.7f * triggerFlash));
             g.fillRect (box);
             g.setColour (c);

@@ -4,7 +4,7 @@
 #include "../PluginProcessor.h"
 
 MainView::MainView (IDGemsSlicerProcessor& p)
-    : processor (p), sliceEditor (p), playPanel (p)
+    : processor (p), sliceEditor (p), sequencerView (p), playPanel (p)
 {
     for (int i = 0; i < 4; ++i)
     {
@@ -12,8 +12,21 @@ MainView::MainView (IDGemsSlicerProcessor& p)
         slotPanels[(size_t) i]->onSelect = [this] (int s) { selectSlot (s); };
         addAndMakeVisible (*slotPanels[(size_t) i]);
     }
-    addAndMakeVisible (sliceEditor);
+    addChildComponent (sliceEditor);
+    addChildComponent (sequencerView);
     addAndMakeVisible (playPanel);
+
+    int tabIndex = 0;
+    for (auto* b : { &cutTab, &seqTab })
+    {
+        b->setRadioGroupId (1001);
+        b->setClickingTogglesState (false);
+        b->onClick = [this, i = tabIndex] { selectTab (i); };
+        addAndMakeVisible (*b);
+        ++tabIndex;
+    }
+    cutTab.setTooltip ("Decoupe du sample selectionne");
+    seqTab.setTooltip ("Sequenceur polyrythmique (une lane par parametre)");
     processor.getSampleManager().addChangeListener (this);
 
     setSize (IDGemsSlicerProcessor::baseWidth, IDGemsSlicerProcessor::baseHeight);
@@ -36,6 +49,7 @@ MainView::MainView (IDGemsSlicerProcessor& p)
 
     buildTexture();
     selectSlot (processor.getSelectedSlot());
+    selectTab (processor.getUiProperty ("selectedTab", 0));
     timerCallback();   // premier affichage complet
     startTimerHz (30);
 }
@@ -52,6 +66,17 @@ void MainView::selectSlot (int s)
     for (int i = 0; i < 4; ++i)
         slotPanels[(size_t) i]->setSelected (i == s);
     sliceEditor.setSlot (s);
+}
+
+void MainView::selectTab (int t)
+{
+    currentTab = juce::jlimit (0, 1, t);
+    processor.setUiProperty ("selectedTab", currentTab);
+    cutTab.setToggleState (currentTab == 0, juce::dontSendNotification);
+    seqTab.setToggleState (currentTab == 1, juce::dontSendNotification);
+    sliceEditor.setVisible (currentTab == 0);
+    sequencerView.setVisible (currentTab == 1);
+    if (currentTab == 1) sequencerView.refresh();
 }
 
 void MainView::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -102,9 +127,6 @@ void MainView::resized()
     slotsArea = r.removeFromTop (150);
     r.removeFromTop (12);
 
-    seqArea = r.removeFromBottom (170);
-    r.removeFromBottom (12);
-
     fxArea = r.removeFromRight (360);
     r.removeFromRight (12);
     mapArea = r;
@@ -118,7 +140,17 @@ void MainView::resized()
             slots.removeFromLeft (12);
         }
     }
-    sliceEditor.setBounds (mapArea);
+    {
+        auto m = mapArea;
+        tabArea = m.removeFromTop (26);
+        auto t = tabArea;
+        cutTab.setBounds (t.removeFromLeft (130));
+        t.removeFromLeft (4);
+        seqTab.setBounds (t.removeFromLeft (130));
+        m.removeFromTop (4);
+        sliceEditor.setBounds (m);
+        sequencerView.setBounds (m);
+    }
     playPanel.setBounds (fxArea);
 
     // En-tete : volume + vu-metre a droite
@@ -163,7 +195,9 @@ void MainView::paint (juce::Graphics& g)
 
     drawMeter (g, meterArea.toFloat());
 
-    drawPlaceholder (g, seqArea, "SEQUENCEUR / LANES", "etape 4  -  Mode Scan, sequenceur polyrythmique, lane Sample", Theme::orange);
+    // Ligne sous les onglets
+    g.setColour (Theme::orange.withAlpha (0.6f));
+    g.fillRect (tabArea.getX(), tabArea.getBottom() + 1, tabArea.getWidth(), 1);
 }
 
 void MainView::drawPlaceholder (juce::Graphics& g, juce::Rectangle<int> area,
@@ -345,6 +379,7 @@ void MainView::timerCallback()
     for (int i = 0; i < 4; ++i) loaded[(size_t) i] = processor.getSampleManager().isLoaded (i);
     const auto probs = idg::Router::normalised (loaded, processor.getProbabilities());
     for (int i = 0; i < 4; ++i) slotPanels[(size_t) i]->tick (probs[(size_t) i]);
-    sliceEditor.tick();
+    if (sliceEditor.isVisible()) sliceEditor.tick();
+    if (sequencerView.isVisible()) sequencerView.tick();
     playPanel.tick (probs, loaded);
 }

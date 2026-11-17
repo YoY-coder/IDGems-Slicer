@@ -24,6 +24,9 @@ public:
         int polyphony = 8;
         double fadeSeconds = 0.003;
         bool normalise = false;
+        bool reverse = false;
+        float startFraction = 0.0f;    // point de depart dans la slice (0..1)
+        int gateSamples = -1;          // > 0 : relachement automatique apres N samples (sequenceur)
     };
 
     void prepare (double sampleRate);
@@ -50,6 +53,9 @@ private:
         int start = 0, end = 0;
         float gain = 1.0f, fadeLen = 0.0f;
         float release = 1.0f, releaseStep = 0.0f;
+        bool reverse = false;
+        int gateRemaining = -1;
+        double startPos = 0.0;
         juce::uint64 age = 0;
     };
 

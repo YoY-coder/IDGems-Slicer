@@ -7,10 +7,11 @@
 class IDGemsSlicerProcessor;
 
 //==============================================================================
-// Panneau JEU / AIGUILLAGE : reglages du Mode Clavier + repartition des
-// probabilites entre les 4 samples + dernier declenchement.
+// Panneau JEU : mode (Clavier / Scan / Accord), reglages de jeu, Scan,
+// Accord, repartition reelle des probabilites, dernier declenchement.
 //==============================================================================
-class PlayPanel final : public juce::Component
+class PlayPanel final : public juce::Component,
+                        private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     explicit PlayPanel (IDGemsSlicerProcessor&);
@@ -22,25 +23,37 @@ public:
     void resized() override;
 
 private:
+    void parameterChanged (const juce::String&, float) override;
+    void updateEnablement();
+
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
+    struct Row
+    {
+        juce::Label label;
+        std::unique_ptr<juce::Slider> slider;
+        std::unique_ptr<SliderAtt> attachment;
+    };
+
+    juce::Slider& addSlider (const juce::String& paramId, const juce::String& label, const juce::String& tooltip);
+    Row* findRow (const juce::String& paramId);
+
     IDGemsSlicerProcessor& processor;
 
-    juce::ComboBox sourceBox;
-    juce::Slider rootSlider      { juce::Slider::LinearBar, juce::Slider::TextBoxLeft };
-    juce::Slider polySlider      { juce::Slider::LinearBar, juce::Slider::TextBoxLeft };
-    juce::Slider transposeSlider { juce::Slider::LinearBar, juce::Slider::TextBoxLeft };
+    juce::ComboBox modeBox, sourceBox;
+    juce::Label modeLabel, sourceLabel;
+    std::unique_ptr<ComboAtt> modeAtt, sourceAtt;
+
+    std::vector<std::pair<juce::String, std::unique_ptr<Row>>> rows;
+
     juce::ToggleButton oneShotToggle  { "ONE-SHOT" };
     juce::ToggleButton noRepeatToggle { "PAS DE REPETITION" };
-    juce::Label sourceLabel, rootLabel, polyLabel, transposeLabel;
+    juce::ToggleButton pitchFollowToggle { "PITCH SUIT LA NOTE" };
+    std::unique_ptr<ButtonAtt> oneShotAtt, noRepeatAtt, pitchFollowAtt;
 
-    std::unique_ptr<ComboAtt> sourceAtt;
-    std::unique_ptr<SliderAtt> rootAtt, polyAtt, transposeAtt;
-    std::unique_ptr<ButtonAtt> oneShotAtt, noRepeatAtt;
-
-    juce::Rectangle<int> distributionArea, lastTriggerArea;
+    juce::Rectangle<int> scanHeader, chordHeader, distributionArea, lastTriggerArea;
     std::array<float, 4> probs {};
     std::array<bool, 4> slotLoaded {};
     int lastTriggerCount = -1;

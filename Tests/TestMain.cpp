@@ -59,12 +59,11 @@ juce::File makeTestWav (const juce::String& name, double freq, int hits, double 
     file.deleteFile();
     juce::WavAudioFormat wav;
     std::unique_ptr<juce::OutputStream> os (file.createOutputStream().release());
-    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0));
+    auto w = wav.createWriterFor (os, juce::AudioFormatWriterOptions{}.withSampleRate (sr)
+                                                                     .withNumChannels (2)
+                                                                     .withBitsPerSample (24));
     if (w != nullptr)
-    {
-        os.release();
         w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
-    }
     return file;
 }
 
@@ -103,6 +102,26 @@ float renderNote (IDGemsSlicerProcessor& p, int note, int blocks = 20)
                 finite = finite && std::isfinite (buf.getSample (ch, s));
     }
     return finite ? peak : -1.0f;
+}
+
+// Tient une note pendant numBlocks blocs, puis la relache ; renvoie le nombre de declenchements
+int holdNote (IDGemsSlicerProcessor& p, int note, int numBlocks, bool release = true)
+{
+    const int before = p.triggerCounter.load();
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+    for (int i = 0; i < numBlocks; ++i)
+    {
+        p.processBlock (buf, midi);
+        midi.clear();
+    }
+    if (release)
+    {
+        midi.addEvent (juce::MidiMessage::noteOff (1, note), 0);
+        p.processBlock (buf, midi);
+    }
+    return p.triggerCounter.load() - before;
 }
 
 void runTests (const juce::String& snapshotPath)
@@ -193,7 +212,84 @@ void runTests (const juce::String& snapshotPath)
     check (c4[1] == 100, "source forcee Sample 2");
     setParam (*proc, "keySource", 0.0f);
 
-    // 8. Sauvegarde / rechargement (slices identiques)
+    // 8. Mode Scan
+    {
+        setParam (*proc, "keySource", 1.0f);   // force Sample 1
+        setParam (*proc, "playMode", 1.0f);
+        const int n0 = onMessageThread ([&] { return sm.getSlot (0).data->numSlices(); });
+        setParam (*proc, "sliceSelect", 100.0f);
+        renderNote (*proc, 72, 2);
+        check (proc->lastTriggerSlice.load() == n0 - 1, "Scan 100 % : derniere slice (" + juce::String (proc->lastTriggerSlice.load() + 1) + "/" + juce::String (n0) + ")");
+        setParam (*proc, "sliceSelect", 0.0f);
+        renderNote (*proc, 50, 2);
+        check (proc->lastTriggerSlice.load() == 0, "Scan 0 % : premiere slice, quelle que soit la note");
+    }
+
+    // 9. Mode Accord
+    {
+        setParam (*proc, "playMode", 2.0f);
+        setParam (*proc, "chordCount", 3.0f);
+        setParam (*proc, "chordSpread", 0.0f);
+        check (holdNote (*proc, 60, 2) == 3, "Accord : 3 slices par note");
+        setParam (*proc, "chordSpread", 100.0f);   // 100 ms = 4800 samples
+        const int first = holdNote (*proc, 60, 1, false);
+        const int later = holdNote (*proc, 61, 0, true) + first;
+        juce::ignoreUnused (later);
+        const int total = first + holdNote (*proc, 62, 0, false);
+        juce::ignoreUnused (total);
+        renderNote (*proc, 60, 20);   // laisse passer le temps
+        check (first == 1, "Accord spread 100 ms : 1 seule slice au premier bloc (" + juce::String (first) + ")");
+        setParam (*proc, "chordSpread", 60.0f);
+        setParam (*proc, "playMode", 0.0f);
+        setParam (*proc, "keySource", 0.0f);
+    }
+
+    // 10. Sequenceur (sans hote : tourne librement a 120 BPM)
+    {
+        onMessageThread ([&]
+        {
+            auto& ps = proc->getPatternStore();
+            ps.setLength (idg::laneRatchet, 2);
+            ps.setValue (idg::laneRatchet, 0, 1.0f);
+            ps.setValue (idg::laneRatchet, 1, 4.0f);
+            ps.setValue (idg::laneSample, 0, 2.0f);   // pas 1 : force Sample 2
+            ps.setValue (idg::laneSample, 1, 1.0f);   // pas 2 : force Sample 1
+        });
+        setParam (*proc, "seqOn", 1.0f);
+        setParam (*proc, "seqRate", 2.0f);   // 1/16 = 6000 samples a 48 kHz / 120 BPM
+
+        // 1er bloc : le pas 1 joue immediatement, force sur le sample 2
+        const int firstBlock = holdNote (*proc, 60, 1, false);
+        check (firstBlock == 1 && proc->lastTriggerSlot.load() == 1, "sequenceur : demarre a la note, lane Sample force S2");
+        // 8 pas en ~45000 samples (88 blocs) ; ratchet 1 puis 4 en alternance (lane de 2 pas) = 4*1 + 4*4 = 20
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer none;
+        for (int i = 1; i < 88; ++i) proc->processBlock (buf, none);
+        const int total = firstBlock + holdNote (*proc, 60, 0, true) ;
+        juce::ignoreUnused (total);
+        const int counted = proc->triggerCounter.load();
+        juce::ignoreUnused (counted);
+        check (proc->currentSeqStep.load() == -1, "sequenceur : s'arrete au relachement de la note");
+
+        // Recompte propre
+        const int c0 = proc->triggerCounter.load();
+        juce::MidiBuffer on;
+        on.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        proc->processBlock (buf, on);
+        for (int i = 1; i < 88; ++i) proc->processBlock (buf, none);
+        juce::MidiBuffer off;
+        off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+        proc->processBlock (buf, off);
+        const int steps = proc->triggerCounter.load() - c0;
+        check (steps == 20, "polyrythmie : lane Ratchet de 2 pas (x1, x4) sur 8 pas = 20 declenchements (" + juce::String (steps) + ")");
+        for (int i = 0; i < 20; ++i) proc->processBlock (buf, none);
+        check (proc->triggerCounter.load() - c0 == 20, "aucun declenchement apres l'arret");
+
+        onMessageThread ([&] { proc->getPatternStore().setLength (idg::laneRatchet, 16); proc->getPatternStore().resetLane (idg::laneRatchet); });
+        setParam (*proc, "seqOn", 0.0f);
+    }
+
+    // 11. Sauvegarde / rechargement (slices identiques)
     onMessageThread ([&] { sm.setManualCuts (1, { 0, 10000, 30000, 70000, 150000 }); });
     juce::MemoryBlock state;
     onMessageThread ([&] { proc->getStateInformation (state); });
@@ -211,6 +307,8 @@ void runTests (const juce::String& snapshotPath)
     });
     check (sameCuts, "slices manuelles conservees apres rechargement");
     check (onMessageThread ([&] { return sm2.getSlot (1).settings.mode == idg::SliceMode::manual; }), "mode conserve");
+    check (onMessageThread ([&] { return proc2->getPatternStore().get().lanes[idg::laneSample].values[0] == 2.0f; }),
+           "pattern du sequenceur conserve");
 
     // 9. Capture de l'interface
     if (snapshotPath.isNotEmpty())
@@ -218,18 +316,21 @@ void runTests (const juce::String& snapshotPath)
         proc->getSampleManager().loadFile (2, fileA);
         waitFor ([&] { return sm.isLoaded (2); });
         renderNote (*proc, 40, 3);
+        onMessageThread ([&] { juce::Random r (7); proc->getPatternStore().randomiseAll (r); });
+        for (const char* tab : { "decoupe", "sequenceur" })
         onMessageThread ([&]
         {
+            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : 0);
             std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
             ed->setSize (1280, 800);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
-            juce::File out (snapshotPath);
+            juce::File out (snapshotPath.replace (".png", juce::String ("_") + tab + ".png"));
             out.deleteFile();
             juce::FileOutputStream fos (out);
             juce::PNGImageFormat().writeImageToStream (img, fos);
             proc->editorBeingDeleted (ed.get());
         });
-        std::cout << "  capture : " << snapshotPath << std::endl;
+        std::cout << "  captures : " << snapshotPath << " (_decoupe / _sequenceur)" << std::endl;
     }
 
     onMessageThread ([&] { proc.reset(); proc2.reset(); });

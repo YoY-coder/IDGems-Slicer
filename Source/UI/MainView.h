@@ -5,6 +5,7 @@
 #include "SlotPanel.h"
 #include "SliceEditor.h"
 #include "PlayPanel.h"
+#include "SequencerView.h"
 
 class IDGemsSlicerProcessor;
 
@@ -28,6 +29,7 @@ private:
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void selectSlot (int);
+    void selectTab (int);
     void drawGlitchTitle (juce::Graphics&, juce::Rectangle<float> area);
     void drawPlaceholder (juce::Graphics&, juce::Rectangle<int> area,
                           const juce::String& title, const juce::String& note,
@@ -45,7 +47,11 @@ private:
 
     std::array<std::unique_ptr<SlotPanel>, 4> slotPanels;
     SliceEditor sliceEditor;
+    SequencerView sequencerView;
     PlayPanel playPanel;
+    juce::TextButton cutTab { "DECOUPE" }, seqTab { "SEQUENCEUR" };
+    int currentTab = 0;
+    juce::Rectangle<int> tabArea;
 
     // Zones (coordonnees de reference)
     juce::Rectangle<int> headerArea, slotsArea, mapArea, fxArea, seqArea, meterArea, midiLedArea;

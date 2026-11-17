@@ -50,9 +50,11 @@ target_sources(IDGemsSlicer
         Source/UI/SlotPanel.cpp
         Source/UI/SliceEditor.cpp
         Source/UI/PlayPanel.cpp
+        Source/UI/SequencerView.cpp
         Source/Engine/Slicer.cpp
         Source/Engine/SampleManager.cpp
-        Source/Engine/VoiceEngine.cpp)
+        Source/Engine/VoiceEngine.cpp
+        Source/Engine/Sequencer.cpp)
 
 target_include_directories(IDGemsSlicer PRIVATE Source)
 

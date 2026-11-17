@@ -81,8 +81,12 @@ void VoiceEngine::noteOn (const SampleData::Ptr& data, const NoteParams& p) noex
     v.note = p.note;
     v.start = slice.start;
     v.end = slice.end;
-    v.pos = (double) slice.start;
-    v.inc = juce::jlimit (0.01, 16.0, p.pitchRatio);
+    v.reverse = p.reverse;
+    const double offset = (double) juce::jlimit (0.0f, 0.95f, p.startFraction) * (slice.end - slice.start);
+    v.pos = p.reverse ? (double) slice.end - 1.0 - offset : (double) slice.start + offset;
+    v.inc = juce::jlimit (0.01, 16.0, p.pitchRatio) * (p.reverse ? -1.0 : 1.0);
+    v.gateRemaining = p.gateSamples;
+    v.startPos = v.pos;
     v.gain = p.velocity * (p.normalise ? slice.normGain : 1.0f);
     v.fadeLen = (float) juce::jmin (p.fadeSeconds * data->audio->sampleRate, (double) (slice.end - slice.start) * 0.5);
     v.release = 1.0f;
@@ -126,7 +130,7 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num) noe
 
         for (int n = 0; n < num; ++n)
         {
-            if (v.pos >= (double) v.end || v.release <= 0.0f)
+            if (v.pos >= (double) v.end || v.pos < (double) v.start || v.release <= 0.0f)
             {
                 stopVoice (v);
                 break;
@@ -138,10 +142,14 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num) noe
             float env = 1.0f;
             if (v.fadeLen > 1.0f)
             {
-                const float fromStart = (float) (v.pos - (double) v.start);
-                const float toEnd = (float) ((double) v.end - v.pos);
+                // fondu d'entree depuis le point de depart reel, fondu de sortie avant le bord de la slice
+                const float fromStart = (float) std::abs (v.pos - v.startPos);
+                const float toEnd = (float) (v.reverse ? v.pos - (double) v.start : (double) v.end - v.pos);
                 env = juce::jmin (1.0f, fromStart / v.fadeLen, toEnd / v.fadeLen);
             }
+            if (v.gateRemaining > 0 && --v.gateRemaining == 0)
+                startRelease (v, gateReleaseSeconds * 0.5);
+
             if (v.releasing)
             {
                 env *= v.release;
