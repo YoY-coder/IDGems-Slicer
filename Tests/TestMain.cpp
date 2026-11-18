@@ -232,13 +232,13 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "chordSpread", 0.0f);
         check (holdNote (*proc, 60, 2) == 3, "Accord : 3 slices par note");
         setParam (*proc, "chordSpread", 100.0f);   // 100 ms = 4800 samples
-        const int first = holdNote (*proc, 60, 1, false);
-        const int later = holdNote (*proc, 61, 0, true) + first;
-        juce::ignoreUnused (later);
-        const int total = first + holdNote (*proc, 62, 0, false);
-        juce::ignoreUnused (total);
-        renderNote (*proc, 60, 20);   // laisse passer le temps
-        check (first == 1, "Accord spread 100 ms : 1 seule slice au premier bloc (" + juce::String (first) + ")");
+        const int c0 = proc->triggerCounter.load();
+        const int first = holdNote (*proc, 60, 1, true);     // note jouee puis relachee
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer none;
+        for (int i = 0; i < 30; ++i) proc->processBlock (buf, none);
+        check (first == 1 && proc->triggerCounter.load() - c0 == 3,
+               "Accord spread 100 ms : 1 slice tout de suite, les 2 autres ensuite");
         setParam (*proc, "chordSpread", 60.0f);
         setParam (*proc, "playMode", 0.0f);
         setParam (*proc, "keySource", 0.0f);
@@ -258,32 +258,30 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "seqOn", 1.0f);
         setParam (*proc, "seqRate", 2.0f);   // 1/16 = 6000 samples a 48 kHz / 120 BPM
 
-        // 1er bloc : le pas 1 joue immediatement, force sur le sample 2
-        const int firstBlock = holdNote (*proc, 60, 1, false);
-        check (firstBlock == 1 && proc->lastTriggerSlot.load() == 1, "sequenceur : demarre a la note, lane Sample force S2");
-        // 8 pas en ~45000 samples (88 blocs) ; ratchet 1 puis 4 en alternance (lane de 2 pas) = 4*1 + 4*4 = 20
         juce::AudioBuffer<float> buf (2, 512);
-        juce::MidiBuffer none;
-        for (int i = 1; i < 88; ++i) proc->processBlock (buf, none);
-        const int total = firstBlock + holdNote (*proc, 60, 0, true) ;
-        juce::ignoreUnused (total);
-        const int counted = proc->triggerCounter.load();
-        juce::ignoreUnused (counted);
-        check (proc->currentSeqStep.load() == -1, "sequenceur : s'arrete au relachement de la note");
-
-        // Recompte propre
-        const int c0 = proc->triggerCounter.load();
-        juce::MidiBuffer on;
+        juce::MidiBuffer none, on, off, reset;
+        reset.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+        proc->processBlock (buf, reset);
         on.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
-        proc->processBlock (buf, on);
-        for (int i = 1; i < 88; ++i) proc->processBlock (buf, none);
-        juce::MidiBuffer off;
         off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+
+        // 1er bloc : le pas 1 joue immediatement, force sur le sample 2
+        const int c0 = proc->triggerCounter.load();
+        proc->processBlock (buf, on);
+        check (proc->triggerCounter.load() - c0 == 1 && proc->lastTriggerSlot.load() == 1,
+               "sequenceur : demarre a la note, lane Sample force S2");
+
+        // 8 pas en ~45000 samples (88 blocs) ; ratchet x1 puis x4 en alternance (lane de 2 pas) = 4*1 + 4*4 = 20
+        for (int i = 1; i < 88; ++i) proc->processBlock (buf, none);
+        const auto stepBeforeStop = proc->currentSeqStep.load();
         proc->processBlock (buf, off);
         const int steps = proc->triggerCounter.load() - c0;
-        check (steps == 20, "polyrythmie : lane Ratchet de 2 pas (x1, x4) sur 8 pas = 20 declenchements (" + juce::String (steps) + ")");
+        // pas 1..8 : x1,x4,x1,x4... = 20, moins le dernier ratchet du pas 8 qui tombe apres le relachement
+        check (steps == 19, "polyrythmie : lane Ratchet de 2 pas (x1, x4) sur 8 pas = 19 declenchements ("
+                            + juce::String (steps) + ", dernier pas " + juce::String (stepBeforeStop + 1) + ")");
+        check (proc->currentSeqStep.load() == -1, "sequenceur : s'arrete au relachement de la note");
         for (int i = 0; i < 20; ++i) proc->processBlock (buf, none);
-        check (proc->triggerCounter.load() - c0 == 20, "aucun declenchement apres l'arret");
+        check (proc->triggerCounter.load() - c0 == steps, "aucun declenchement apres l'arret");
 
         onMessageThread ([&] { proc->getPatternStore().setLength (idg::laneRatchet, 16); proc->getPatternStore().resetLane (idg::laneRatchet); });
         setParam (*proc, "seqOn", 0.0f);

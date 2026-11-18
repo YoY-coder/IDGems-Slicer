@@ -221,7 +221,8 @@ void IDGemsSlicerProcessor::buildTriggers (const TriggerRequest& r, juce::int64 
         pos += wheelToScanParam->load() * 0.01f * modWheel;
         pos += velToScanParam->load() * 0.01f * r.velocity;
         pos += (audioRandom.nextFloat() - 0.5f) * scanRandomParam->load() * 0.01f;
-        pos -= std::floor (pos);   // reboucle dans 0..1
+        if (pos < 0.0f || pos > 1.0f)
+            pos -= std::floor (pos);   // reboucle dans 0..1 (100 % reste la derniere slice)
         base = juce::jlimit (0, n - 1, juce::roundToInt (pos * (float) (n - 1)));
     }
 
