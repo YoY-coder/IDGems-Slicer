@@ -13,6 +13,7 @@ namespace
         const juce::Identifier slots        { "Slots" };
         const juce::Identifier sequencer    { "Sequencer" };
         const juce::Identifier mapPath      { "MapPath" };
+        const juce::Identifier fxOrder      { "fxOrder" };
     }
 
     constexpr int currentStateVersion = 4;
@@ -80,6 +81,38 @@ IDGemsSlicerProcessor::IDGemsSlicerProcessor()
     freezePosParam   = p ("freezePos");
     freezeSizeParam  = p ("freezeSize");
     freezeFadeParam  = p ("freezeFade");
+
+    fxSendParam = p ("fxSend");
+    static const char* fxIds[] { "crush", "fxFilter", "tape", "stutter", "grain" };
+    for (int i = 0; i < idg::numFxModules; ++i)
+    {
+        fxOnParams[(size_t) i]  = apvts.getRawParameterValue (juce::String (fxIds[i]) + "On");
+        fxMixParams[(size_t) i] = apvts.getRawParameterValue (juce::String (fxIds[i]) + "Mix");
+    }
+    crushBitsParam     = p ("crushBits");
+    crushDownParam     = p ("crushDown");
+    fxFilterTypeParam  = p ("fxFilterType");
+    fxCutoffParam      = p ("fxCutoff");
+    fxResoParam        = p ("fxReso");
+    tapeStopParam      = p ("tapeStop");
+    tapeTimeParam      = p ("tapeTime");
+    stutterParam       = p ("stutterHold");
+    stutterDivParam    = p ("stutterDiv");
+    stutterChanceParam = p ("stutterChance");
+    grainDensityParam  = p ("grainDensity");
+    grainSizeParam     = p ("grainSize");
+    grainSprayParam    = p ("grainSpray");
+    grainPitchParam    = p ("grainPitch");
+    ottDepthParam      = p ("ottDepth");
+    ottTimeParam       = p ("ottTime");
+    ottUpParam         = p ("ottUp");
+    ottDownParam       = p ("ottDown");
+    clipOnParam        = p ("clipOn");
+    clipDriveParam     = p ("clipDrive");
+    masterMixParam     = p ("masterMix");
+    limiterOnParam     = p ("limiterOn");
+    ceilingParam       = p ("ceiling");
+    apvts.state.setProperty (IDs::fxOrder, fxChain.order.load(), nullptr);
 
     apvts.state.setProperty (IDs::editorWidth,  baseWidth,  nullptr);
     apvts.state.setProperty (IDs::editorHeight, baseHeight, nullptr);
@@ -195,6 +228,55 @@ juce::AudioProcessorValueTreeState::ParameterLayout IDGemsSlicerProcessor::creat
     layout.add (ms ("freezeSize", "Freeze : taille du grain", 5.0f, 1000.0f, 80.0f, 0.4f));
     layout.add (percent ("freezeFade", "Freeze : fondu", 0.0f, 100.0f, 40.0f));
 
+    // Chaine FX IDGems (etape 7)
+    layout.add (percent ("fxSend", "Envoi FX", 0.0f, 100.0f, 100.0f));
+    const char* fxIds[] { "crush", "fxFilter", "tape", "stutter", "grain" };
+    for (int i = 0; i < idg::numFxModules; ++i)
+    {
+        const auto name = idg::fxModuleNames()[i];
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { String (fxIds[i]) + "On", 1 }, name + " : on", false));
+        layout.add (percent (String (fxIds[i]) + "Mix", name + " : dry/wet", 0.0f, 100.0f, 100.0f));
+    }
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "crushBits", 1 }, "Bitcrush : bits",
+                                                       NormalisableRange<float> (1.0f, 16.0f, 0.1f), 6.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "crushDown", 1 }, "Bitcrush : downsample",
+                                                       NormalisableRange<float> (1.0f, 40.0f, 0.1f, 0.5f), 4.0f,
+                                                       AudioParameterFloatAttributes().withLabel ("x")));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "fxFilterType", 1 }, "Filtre FX : type",
+                                                        StringArray { "Passe-bas", "Passe-haut", "Passe-bande" }, 0));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "fxCutoff", 1 }, "Filtre FX : frequence",
+                                                       NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.25f), 1200.0f,
+                                                       AudioParameterFloatAttributes().withLabel ("Hz")));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "fxReso", 1 }, "Filtre FX : resonance",
+                                                       NormalisableRange<float> (0.5f, 12.0f, 0.01f, 0.4f), 2.0f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "tapeStop", 1 }, "Tape stop : declencher", false));
+    layout.add (ms ("tapeTime", "Tape stop : duree", 50.0f, 3000.0f, 600.0f, 0.5f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "stutterHold", 1 }, "Stutter : declencher", false));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "stutterDiv", 1 }, "Stutter : longueur",
+                                                        StringArray { "1/4", "1/8", "1/16", "1/32", "1/64", "1/8T", "1/16T" }, 2));
+    layout.add (percent ("stutterChance", "Stutter : chance auto", 0.0f, 100.0f, 0.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "grainDensity", 1 }, "Granulaire : densite",
+                                                       NormalisableRange<float> (1.0f, 60.0f, 0.1f, 0.5f), 15.0f,
+                                                       AudioParameterFloatAttributes().withLabel ("/s")));
+    layout.add (ms ("grainSize", "Granulaire : taille", 10.0f, 500.0f, 120.0f, 0.5f));
+    layout.add (ms ("grainSpray", "Granulaire : dispersion", 0.0f, 2000.0f, 400.0f, 0.5f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "grainPitch", 1 }, "Granulaire : pitch random",
+                                                       NormalisableRange<float> (0.0f, 24.0f, 0.1f), 0.0f,
+                                                       AudioParameterFloatAttributes().withLabel ("st")));
+
+    // Master
+    layout.add (percent ("ottDepth", "OTT : profondeur", 0.0f, 100.0f, 0.0f));
+    layout.add (percent ("ottTime", "OTT : temps", 0.0f, 100.0f, 50.0f));
+    layout.add (percent ("ottUp", "OTT : vers le haut", 0.0f, 100.0f, 100.0f));
+    layout.add (percent ("ottDown", "OTT : vers le bas", 0.0f, 100.0f, 100.0f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "clipOn", 1 }, "Soft clip", false));
+    layout.add (percent ("clipDrive", "Soft clip : drive", 0.0f, 100.0f, 20.0f));
+    layout.add (percent ("masterMix", "Master : dry/wet", 0.0f, 100.0f, 100.0f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "limiterOn", 1 }, "Limiteur", true));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "ceiling", 1 }, "Limiteur : plafond",
+                                                       NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -0.3f,
+                                                       AudioParameterFloatAttributes().withLabel ("dB")));
+
     return layout;
 }
 
@@ -202,7 +284,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout IDGemsSlicerProcessor::creat
 void IDGemsSlicerProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate > 0 ? sampleRate : 44100.0;
-    engine.prepare (currentSampleRate, juce::jmax (512, samplesPerBlock));
+    const int maxBlock = juce::jmax (4096, samplesPerBlock);
+    engine.prepare (currentSampleRate, maxBlock);
+    fxChain.prepare (currentSampleRate, maxBlock);
+    master.prepare (currentSampleRate, maxBlock);
+    fxBus.setSize (2, maxBlock);
     outputGain.reset (currentSampleRate, 0.05);
     outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGainDb->load()));
     numPending = 0;
@@ -263,6 +349,7 @@ void IDGemsSlicerProcessor::fire (const Trigger& t) noexcept
     p.clickSemitones = clickAmountParam->load();
     p.clickSeconds = clickTimeParam->load() * 0.001f;
     p.freeze = t.freeze || freezeOnParam->load() > 0.5f;
+    p.fxSend = t.fxSend >= 0.0f ? t.fxSend : fxSendParam->load() * 0.01f;
     engine.noteOn (data, p);
 
     lastTriggerSlot.store (t.slot);
@@ -323,6 +410,7 @@ void IDGemsSlicerProcessor::buildTriggers (const TriggerRequest& r, juce::int64 
     t.reverse = r.reverse;
     t.oneShot = r.oneShot;
     t.freeze = r.freeze;
+    t.fxSend = r.fxSend;
     t.gateSamples = r.gateSamples;
 
     const int count = mode == modeChord ? juce::jlimit (2, maxChord, (int) chordCountParam->load()) : 1;
@@ -472,6 +560,7 @@ void IDGemsSlicerProcessor::fireSequencerStep (juce::int64 step, juce::int64 tim
     r.startFraction = pattern.valueAt (idg::laneStart, step);
     r.reverse = pattern.valueAt (idg::laneReverse, step) > 0.5f;
     r.freeze = pattern.valueAt (idg::laneFreeze, step) > 0.5f;
+    r.fxSend = pattern.lanes[idg::laneFxSend].enabled ? pattern.valueAt (idg::laneFxSend, step) : -1.0f;
     r.oneShot = oneShotParam->load() > 0.5f;
     r.gateSamples = r.oneShot ? -1 : juce::jmax (64, (int) (pattern.valueAt (idg::laneGate, step) * spacing));
     r.voiceNote = sequencerNote;
@@ -518,13 +607,13 @@ void IDGemsSlicerProcessor::processSegment (juce::AudioBuffer<float>& buffer, in
         if (idx < 0) break;
 
         const int at = (int) juce::jlimit ((juce::int64) cursor, (juce::int64) end, pending[(size_t) idx].time - sampleCounter);
-        if (at > cursor) { engine.render (buffer, cursor, at - cursor, liveParams); cursor = at; }
+        if (at > cursor) { engine.render (buffer, fxBus, cursor, at - cursor, liveParams); cursor = at; }
 
         const auto t = pending[(size_t) idx].trigger;
         pending[(size_t) idx] = pending[(size_t) --numPending];
         fire (t);
     }
-    if (cursor < end) engine.render (buffer, cursor, end - cursor, liveParams);
+    if (cursor < end) engine.render (buffer, fxBus, cursor, end - cursor, liveParams);
 }
 
 //==============================================================================
@@ -618,6 +707,27 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     buffer.clear();
     const int numSamples = buffer.getNumSamples();
 
+    // Bloc plus grand que prevu (rare) : on decoupe pour ne jamais allouer
+    if (numSamples > fxBus.getNumSamples() || buffer.getNumChannels() < 2)
+    {
+        if (buffer.getNumChannels() >= 2)
+        {
+            int done = 0;
+            juce::MidiBuffer empty;
+            while (done < numSamples)
+            {
+                const int n = juce::jmin (fxBus.getNumSamples(), numSamples - done);
+                juce::AudioBuffer<float> part (buffer.getArrayOfWritePointers(), 2, done, n);
+                juce::MidiBuffer partMidi;
+                if (done == 0) partMidi.swapWith (midi);   // le MIDI va dans le premier morceau
+                processBlock (part, done == 0 ? partMidi : empty);
+                done += n;
+            }
+            return;
+        }
+    }
+    fxBus.clear (0, numSamples);
+
     sampleManager.updateAudioCache (audioSlots);
 
     // Reglages de voix modulables en temps reel (filtre, drive, freeze)
@@ -709,6 +819,15 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     else if (! seqRunning && numHeld > 0 && seqOnParam->load() > 0.5f)
         startSequencer (numSamples - 1);
 
+    // Chaine FX (bus d'envoi) puis retour dans la sortie
+    readFxParams();
+    if (buffer.getNumChannels() >= 2)
+    {
+        fxChain.process (fxBus, numSamples, fxParams, { blockStartBeat, beatsPerSample });
+        for (int ch = 0; ch < 2; ++ch) buffer.addFrom (ch, 0, fxBus, ch, 0, numSamples);
+        master.process (buffer, numSamples, masterParams);
+    }
+
     sampleCounter += numSamples;
     freeBeat = playing ? ppq + numSamples * beatsPerSample : freeBeat + numSamples * beatsPerSample;
 
@@ -721,6 +840,46 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         const float prev = outputLevel[(size_t) ch].load (std::memory_order_relaxed);
         outputLevel[(size_t) ch].store (juce::jmax (peak, prev * 0.9f), std::memory_order_relaxed);
     }
+}
+
+void IDGemsSlicerProcessor::readFxParams() noexcept
+{
+    for (int i = 0; i < idg::numFxModules; ++i)
+    {
+        fxParams.on[(size_t) i] = fxOnParams[(size_t) i]->load() > 0.5f;
+        fxParams.mix[(size_t) i] = fxMixParams[(size_t) i]->load() * 0.01f;
+    }
+    fxParams.crushBits = crushBitsParam->load();
+    fxParams.crushDownsample = crushDownParam->load();
+    fxParams.filterType = (int) fxFilterTypeParam->load();
+    fxParams.filterCutoff = fxCutoffParam->load();
+    fxParams.filterReso = fxResoParam->load();
+    fxParams.tapeEngaged = tapeStopParam->load() > 0.5f;
+    fxParams.tapeSeconds = tapeTimeParam->load() * 0.001f;
+    fxParams.stutterEngaged = stutterParam->load() > 0.5f;
+    fxParams.stutterDivision = (int) stutterDivParam->load();
+    fxParams.stutterChance = stutterChanceParam->load() * 0.01f;
+    fxParams.grainDensity = grainDensityParam->load();
+    fxParams.grainSize = grainSizeParam->load() * 0.001f;
+    fxParams.grainSpray = grainSprayParam->load() * 0.001f;
+    fxParams.grainPitch = grainPitchParam->load();
+
+    masterParams.ottDepth = ottDepthParam->load() * 0.01f;
+    masterParams.ottTime = ottTimeParam->load() * 0.01f;
+    masterParams.ottUp = ottUpParam->load() * 0.01f;
+    masterParams.ottDown = ottDownParam->load() * 0.01f;
+    masterParams.clipOn = clipOnParam->load() > 0.5f;
+    masterParams.clipDrive = clipDriveParam->load() * 0.01f;
+    masterParams.mix = masterMixParam->load() * 0.01f;
+    masterParams.limiterOn = limiterOnParam->load() > 0.5f;
+    masterParams.ceilingDb = ceilingParam->load();
+}
+
+void IDGemsSlicerProcessor::setFxOrder (const std::array<int, idg::numFxModules>& o)
+{
+    const int v = idg::FxChain::encodeOrder (o);
+    fxChain.order.store (idg::FxChain::encodeOrder (idg::FxChain::decodeOrder (v)));
+    apvts.state.setProperty (IDs::fxOrder, fxChain.order.load(), nullptr);
 }
 
 //==============================================================================
@@ -792,6 +951,8 @@ void IDGemsSlicerProcessor::setStateInformation (const void* data, int sizeInByt
             tree.removeChild (seq, nullptr);
             tree.removeChild (path, nullptr);
             apvts.replaceState (tree);
+            if (tree.hasProperty (IDs::fxOrder))
+                setFxOrder (idg::FxChain::decodeOrder ((int) tree.getProperty (IDs::fxOrder)));
             sampleManager.fromValueTree (slots.isValid() ? slots : juce::ValueTree (IDs::slots));
 
             patternStore.fromValueTree (seq.isValid() ? seq : juce::ValueTree (IDs::sequencer));

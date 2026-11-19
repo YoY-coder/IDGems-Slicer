@@ -430,6 +430,106 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "keySource", 0.0f);
     }
 
+    // 10c. Chaine FX + master (etape 7)
+    {
+        setParam (*proc, "playMode", 0.0f);
+        setParam (*proc, "keySource", 1.0f);
+
+        // Limiteur : plafond respecte meme avec un signal pousse
+        setParam (*proc, "ceiling", -6.0f);
+        setParam (*proc, "normalize", 1.0f);
+        setParam (*proc, "clipOn", 1.0f);
+        setParam (*proc, "clipDrive", 100.0f);
+        float maxPeak = 0.0f;
+        for (float v : blockPeaks (*proc, 36, 30)) maxPeak = juce::jmax (maxPeak, v);
+        check (maxPeak > 0.1f && maxPeak <= juce::Decibels::decibelsToGain (-6.0f) + 1.0e-4f,
+               "limiteur : crete " + juce::String (juce::Decibels::gainToDecibels (maxPeak), 2) + " dB (plafond -6 dB)");
+        setParam (*proc, "ceiling", -0.3f);
+        setParam (*proc, "normalize", 0.0f);
+        setParam (*proc, "clipOn", 0.0f);
+        setParam (*proc, "clipDrive", 20.0f);
+
+        // Bitcrush 2 bits : tres peu de niveaux differents en sortie
+        setParam (*proc, "limiterOn", 0.0f);
+        setParam (*proc, "crushOn", 1.0f);
+        setParam (*proc, "crushBits", 2.0f);
+        setParam (*proc, "crushDown", 1.0f);
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer on, none, off;
+            on.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 127), 0);
+            proc->processBlock (buf, on);
+            proc->processBlock (buf, none);
+            std::set<float> levels;
+            for (int i = 0; i < 512; ++i) levels.insert (buf.getSample (0, i));
+            off.addEvent (juce::MidiMessage::noteOff (1, 36), 0);
+            proc->processBlock (buf, off);
+            for (int i = 0; i < 40; ++i) proc->processBlock (buf, none);
+            check (levels.size() <= 5, "bitcrush 2 bits : " + juce::String ((int) levels.size()) + " niveaux distincts");
+        }
+        setParam (*proc, "crushOn", 0.0f);
+        setParam (*proc, "limiterOn", 1.0f);
+
+        // Stutter : le fragment continue de boucler apres la fin de la slice
+        setParam (*proc, "stutterOn", 1.0f);
+        setParam (*proc, "stutterDiv", 2.0f);
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer on, none, off;
+            on.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 110), 0);
+            off.addEvent (juce::MidiMessage::noteOff (1, 36), 0);
+            proc->processBlock (buf, on);
+            for (int i = 0; i < 6; ++i) proc->processBlock (buf, none);
+            setParam (*proc, "stutterHold", 1.0f);
+            proc->processBlock (buf, off);
+            float late = 0.0f;
+            for (int i = 0; i < 80; ++i) { proc->processBlock (buf, none); if (i > 60) late = juce::jmax (late, buf.getMagnitude (0, 512)); }
+            setParam (*proc, "stutterHold", 0.0f);
+            for (int i = 0; i < 10; ++i) proc->processBlock (buf, none);
+            const float after = buf.getMagnitude (0, 512);
+            check (late > 0.01f && after < 0.001f, "stutter : boucle apres la fin de la slice (" + juce::String (late, 3) + "), s'arrete au relachement");
+        }
+        setParam (*proc, "stutterOn", 0.0f);
+
+        // Tape stop : avec un son continu (freeze), silence apres la duree d'arret
+        setParam (*proc, "freezeOn", 1.0f);
+        setParam (*proc, "tapeOn", 1.0f);
+        setParam (*proc, "tapeTime", 300.0f);
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer on, none, off;
+            on.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 110), 0);
+            off.addEvent (juce::MidiMessage::noteOff (1, 36), 0);
+            proc->processBlock (buf, on);
+            for (int i = 0; i < 10; ++i) proc->processBlock (buf, none);
+            const float before = buf.getMagnitude (0, 512);
+            setParam (*proc, "tapeStop", 1.0f);
+            for (int i = 0; i < 50; ++i) proc->processBlock (buf, none);   // ~530 ms
+            const float stopped = buf.getMagnitude (0, 512);
+            setParam (*proc, "tapeStop", 0.0f);
+            for (int i = 0; i < 5; ++i) proc->processBlock (buf, none);
+            const float back = buf.getMagnitude (0, 512);
+            proc->processBlock (buf, off);
+            for (int i = 0; i < 40; ++i) proc->processBlock (buf, none);
+            check (before > 0.01f && stopped < 0.001f && back > 0.01f, "tape stop : la bande s'arrete puis repart");
+        }
+        setParam (*proc, "tapeOn", 0.0f);
+        setParam (*proc, "freezeOn", 0.0f);
+
+        // Granulaire + OTT : audio propre
+        setParam (*proc, "grainOn", 1.0f);
+        setParam (*proc, "grainPitch", 12.0f);
+        setParam (*proc, "ottDepth", 100.0f);
+        const auto g = blockPeaks (*proc, 36, 60);
+        check (lastAudibleBlock (g) > 5 && std::all_of (g.begin(), g.end(), [] (float v) { return v >= 0.0f && v <= 1.0f; }),
+               "granulaire + OTT : son present, propre et sous le plafond");
+        setParam (*proc, "grainOn", 0.0f);
+        setParam (*proc, "ottDepth", 0.0f);
+
+        onMessageThread ([&] { proc->setFxOrder ({ 4, 3, 2, 1, 0 }); });
+        setParam (*proc, "keySource", 0.0f);
+    }
+
     // 11. Sauvegarde / rechargement (slices identiques)
     onMessageThread ([&] { sm.setManualCuts (1, { 0, 10000, 30000, 70000, 150000 }); });
     waitFor ([&] { return sm.getSlot (1).data->numSlices() == 5; });
@@ -452,6 +552,7 @@ void runTests (const juce::String& snapshotPath)
     check (onMessageThread ([&] { return juce::approximatelyEqual (proc2->getPatternStore().get().lanes[idg::laneSample].values[0], 2.0f); }),
            "pattern du sequenceur conserve");
     check (onMessageThread ([&] { return proc2->getMapStore().get().count == 2; }), "trajet de la carte conserve");
+    check (onMessageThread ([&] { return proc2->getFxOrder()[0] == 4 && proc2->getFxOrder()[4] == 0; }), "ordre de la chaine FX conserve");
 
     // 9. Capture de l'interface
     if (snapshotPath.isNotEmpty())
@@ -463,10 +564,10 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "selectMode", 1.0f);
         setParam (*proc, "mapAxisX", 0.0f);
         setParam (*proc, "mapAxisY", 1.0f);
-        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix" })
+        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix", "fx" })
         onMessageThread ([&]
         {
-            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : 0);
+            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : juce::String (tab) == "fx" ? 4 : 0);
             std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
             ed->setSize (1280, 800);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);

@@ -4,7 +4,7 @@
 #include "../PluginProcessor.h"
 
 MainView::MainView (IDGemsSlicerProcessor& p)
-    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), voiceView (p), playPanel (p)
+    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), voiceView (p), fxView (p), playPanel (p)
 {
     for (int i = 0; i < 4; ++i)
     {
@@ -16,10 +16,11 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     addChildComponent (sequencerView);
     addChildComponent (mapView);
     addChildComponent (voiceView);
+    addChildComponent (fxView);
     addAndMakeVisible (playPanel);
 
     int tabIndex = 0;
-    for (auto* b : { &cutTab, &seqTab, &mapTab, &voiceTab })
+    for (auto* b : { &cutTab, &seqTab, &mapTab, &voiceTab, &fxTab })
     {
         b->setRadioGroupId (1001);
         b->setClickingTogglesState (false);
@@ -31,6 +32,7 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     seqTab.setTooltip ("Sequenceur polyrythmique (une lane par parametre)");
     mapTab.setTooltip ("Carte des slices des 4 samples (Slice Select XY, trajets)");
     voiceTab.setTooltip ("Reglages des voix : enveloppe, pitch clic, filtre, Slice Freeze");
+    fxTab.setTooltip ("Chaine FX IDGems et master");
     processor.getSampleManager().addChangeListener (this);
 
     setSize (IDGemsSlicerProcessor::baseWidth, IDGemsSlicerProcessor::baseHeight);
@@ -74,7 +76,7 @@ void MainView::selectSlot (int s)
 
 void MainView::selectTab (int t)
 {
-    currentTab = juce::jlimit (0, 3, t);
+    currentTab = juce::jlimit (0, 4, t);
     processor.setUiProperty ("selectedTab", currentTab);
     cutTab.setToggleState (currentTab == 0, juce::dontSendNotification);
     seqTab.setToggleState (currentTab == 1, juce::dontSendNotification);
@@ -82,6 +84,8 @@ void MainView::selectTab (int t)
     mapView.setVisible (currentTab == 2);
     voiceTab.setToggleState (currentTab == 3, juce::dontSendNotification);
     voiceView.setVisible (currentTab == 3);
+    fxTab.setToggleState (currentTab == 4, juce::dontSendNotification);
+    fxView.setVisible (currentTab == 4);
     sliceEditor.setVisible (currentTab == 0);
     sequencerView.setVisible (currentTab == 1);
     if (currentTab == 1) sequencerView.refresh();
@@ -160,11 +164,14 @@ void MainView::resized()
         mapTab.setBounds (t.removeFromLeft (130));
         t.removeFromLeft (4);
         voiceTab.setBounds (t.removeFromLeft (130));
+        t.removeFromLeft (4);
+        fxTab.setBounds (t.removeFromLeft (130));
         m.removeFromTop (4);
         sliceEditor.setBounds (m);
         sequencerView.setBounds (m);
         mapView.setBounds (m);
         voiceView.setBounds (m);
+        fxView.setBounds (m);
     }
     playPanel.setBounds (fxArea);
 
@@ -397,5 +404,6 @@ void MainView::timerCallback()
     if (sliceEditor.isVisible()) sliceEditor.tick();
     if (sequencerView.isVisible()) sequencerView.tick();
     if (mapView.isVisible()) mapView.tick();
+    if (fxView.isVisible()) fxView.tick();
     playPanel.tick (probs, loaded);
 }

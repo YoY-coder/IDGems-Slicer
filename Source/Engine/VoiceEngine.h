@@ -36,6 +36,7 @@ public:
         float clickSemitones = 0.0f;   // pitch env "clic"
         float clickSeconds = 0.02f;
         bool freeze = false;
+        float fxSend = 1.0f;           // part du signal envoyee a la chaine FX
     };
 
     // Reglages lus a chaque bloc (modulables en temps reel)
@@ -52,7 +53,8 @@ public:
     void noteOn (const SampleData::Ptr& data, const NoteParams&) noexcept;
     void noteOff (int note) noexcept;
     void allNotesOff (bool immediate) noexcept;
-    void render (juce::AudioBuffer<float>& out, int start, int num, const LiveParams&) noexcept;
+    // out : sortie directe ; fx : bus d'envoi vers la chaine FX
+    void render (juce::AudioBuffer<float>& out, juce::AudioBuffer<float>& fx, int start, int num, const LiveParams&) noexcept;
 
     // Pour l'affichage (lu par l'interface)
     struct Display
@@ -79,6 +81,7 @@ private:
         juce::ADSR adsr;
         float clickSemis = 0.0f, clickEnv = 0.0f, clickDecay = 0.0f;
         bool freeze = false;
+        float fxSend = 1.0f;
         double grainPhase = 0.0;
         float played = 0.0f;                    // samples (source) deja lus : fondu d'entree
         juce::int64 oneShotRemaining = -1;      // duree max d'un freeze en one-shot

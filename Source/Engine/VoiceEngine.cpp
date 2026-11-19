@@ -129,6 +129,7 @@ void VoiceEngine::noteOn (const SampleData::Ptr& data, const NoteParams& p) noex
     v.clickDecay = (float) std::exp (-1.0 / juce::jmax (1.0, p.clickSeconds * sampleRate));
 
     v.freeze = p.freeze;
+    v.fxSend = juce::jlimit (0.0f, 1.0f, p.fxSend);
     v.grainPhase = 0.0;
     v.played = 0.0f;
     // Un freeze en one-shot dure la longueur (jouee) de la slice
@@ -155,9 +156,10 @@ void VoiceEngine::allNotesOff (bool immediate) noexcept
     }
 }
 
-void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num, const LiveParams& lp) noexcept
+void VoiceEngine::render (juce::AudioBuffer<float>& out, juce::AudioBuffer<float>& fx, int start, int num, const LiveParams& lp) noexcept
 {
     const int outCh = out.getNumChannels();
+    const bool hasFx = fx.getNumChannels() >= outCh && fx.getNumSamples() >= start + num;
     const float driveGain = 1.0f + lp.drive * 24.0f;
     const float driveComp = 1.0f / (1.0f + lp.drive * 3.0f);
 
@@ -258,7 +260,16 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num, con
                     smp = std::tanh (smp * driveGain) * driveComp;
                 }
 
-                out.addSample (ch, start + n, smp * g);
+                const float y = smp * g;
+                if (hasFx && v.fxSend > 0.0f)
+                {
+                    out.addSample (ch, start + n, y * (1.0f - v.fxSend));
+                    fx.addSample (ch, start + n, y * v.fxSend);
+                }
+                else
+                {
+                    out.addSample (ch, start + n, y);
+                }
             }
 
             if (v.played < 1.0e6f) v.played += (float) inc;

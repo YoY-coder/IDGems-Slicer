@@ -7,6 +7,8 @@
 #include "Engine/Router.h"
 #include "Engine/Sequencer.h"
 #include "Engine/MapStore.h"
+#include "Engine/FxChain.h"
+#include "Engine/Master.h"
 
 //==============================================================================
 // IDGems Slicer - moteur audio.
@@ -71,6 +73,11 @@ public:
     idg::PatternStore& getPatternStore() noexcept { return patternStore; }
     idg::MapStore& getMapStore() noexcept { return mapStore; }
 
+    // Ordre de la chaine FX (glisser-deposer dans l'interface)
+    std::array<int, idg::numFxModules> getFxOrder() const { return idg::FxChain::decodeOrder (fxChain.order.load()); }
+    void setFxOrder (const std::array<int, idg::numFxModules>&);
+    const idg::FxChain& getFxChain() const noexcept { return fxChain; }
+
     // Position effective du curseur sur la carte (pour l'affichage)
     std::atomic<float> cursorX { 0.5f }, cursorY { 0.5f };
 
@@ -98,6 +105,7 @@ private:
         float velocity = 1.0f, semitones = 0.0f, startFraction = 0.0f;
         bool reverse = false, oneShot = false, freeze = false;
         int gateSamples = -1;
+        float fxSend = -1.0f;   // < 0 : reglage global
     };
 
     struct Pending { juce::int64 time = 0; Trigger trigger; };
@@ -113,6 +121,7 @@ private:
         bool reverse = false;
         bool oneShot = false;
         bool freeze = false;           // lane Freeze du sequenceur
+        float fxSend = -1.0f;          // lane Envoi FX (< 0 : reglage global)
         int gateSamples = -1;
         int voiceNote = -1;            // note utilisee pour le relachement
     };
@@ -190,6 +199,24 @@ private:
                        *filterTypeParam = nullptr, *cutoffParam = nullptr, *resonanceParam = nullptr, *driveParam = nullptr,
                        *freezeOnParam = nullptr, *freezePosParam = nullptr, *freezeSizeParam = nullptr, *freezeFadeParam = nullptr;
     idg::VoiceEngine::LiveParams liveParams;
+
+    idg::FxChain fxChain;
+    idg::Master master;
+    juce::AudioBuffer<float> fxBus;
+    idg::FxParams fxParams;
+    idg::MasterParams masterParams;
+    void readFxParams() noexcept;
+
+    std::atomic<float> *fxSendParam = nullptr;
+    std::array<std::atomic<float>*, idg::numFxModules> fxOnParams {}, fxMixParams {};
+    std::atomic<float> *crushBitsParam = nullptr, *crushDownParam = nullptr,
+                       *fxFilterTypeParam = nullptr, *fxCutoffParam = nullptr, *fxResoParam = nullptr,
+                       *tapeStopParam = nullptr, *tapeTimeParam = nullptr,
+                       *stutterParam = nullptr, *stutterDivParam = nullptr, *stutterChanceParam = nullptr,
+                       *grainDensityParam = nullptr, *grainSizeParam = nullptr, *grainSprayParam = nullptr, *grainPitchParam = nullptr,
+                       *ottDepthParam = nullptr, *ottTimeParam = nullptr, *ottUpParam = nullptr, *ottDownParam = nullptr,
+                       *clipOnParam = nullptr, *clipDriveParam = nullptr, *masterMixParam = nullptr,
+                       *limiterOnParam = nullptr, *ceilingParam = nullptr;
 
     // Pre-ecoute (interface -> audio), sans allocation
     struct PreviewRequest { int slot, slice; };
