@@ -54,6 +54,7 @@ target_sources(IDGemsSlicer
         Source/UI/MapView.cpp
         Source/UI/VoiceView.cpp
         Source/UI/FxView.cpp
+        Source/UI/RandomView.cpp
         Source/Engine/Slicer.cpp
         Source/Engine/SampleManager.cpp
         Source/Engine/VoiceEngine.cpp
@@ -61,7 +62,8 @@ target_sources(IDGemsSlicer
         Source/Engine/SliceAnalysis.cpp
         Source/Engine/MapStore.cpp
         Source/Engine/FxChain.cpp
-        Source/Engine/Master.cpp)
+        Source/Engine/Master.cpp
+        Source/Engine/RandomManager.cpp)
 
 target_include_directories(IDGemsSlicer PRIVATE Source)
 

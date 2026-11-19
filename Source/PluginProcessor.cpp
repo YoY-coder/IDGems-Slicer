@@ -14,6 +14,7 @@ namespace
         const juce::Identifier sequencer    { "Sequencer" };
         const juce::Identifier mapPath      { "MapPath" };
         const juce::Identifier fxOrder      { "fxOrder" };
+        const juce::Identifier random       { "Random" };
     }
 
     constexpr int currentStateVersion = 4;
@@ -113,6 +114,10 @@ IDGemsSlicerProcessor::IDGemsSlicerProcessor()
     limiterOnParam     = p ("limiterOn");
     ceilingParam       = p ("ceiling");
     apvts.state.setProperty (IDs::fxOrder, fxChain.order.load(), nullptr);
+
+    mutateOnParam   = p ("mutateOn");
+    mutateBarsParam = p ("mutateBars");
+    randomManager = std::make_unique<idg::RandomManager> (apvts, patternStore, sampleManager);
 
     apvts.state.setProperty (IDs::editorWidth,  baseWidth,  nullptr);
     apvts.state.setProperty (IDs::editorHeight, baseHeight, nullptr);
@@ -276,6 +281,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout IDGemsSlicerProcessor::creat
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "ceiling", 1 }, "Limiteur : plafond",
                                                        NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -0.3f,
                                                        AudioParameterFloatAttributes().withLabel ("dB")));
+
+    // Random (etape 8)
+    layout.add (percent ("randomAmount", "Random : dosage", 0.0f, 100.0f, 60.0f));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "randomMode", 1 }, "Random : mode",
+                                                        StringArray { "Tout", "Garder le groove", "Garder les sons" }, 0));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "mutateOn", 1 }, "Mutate auto", false));
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { "mutateBars", 1 }, "Mutate : toutes les N mesures", 1, 32, 4));
+    layout.add (percent ("mutateRate", "Mutate : taux", 0.0f, 100.0f, 15.0f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "morphOn", 1 }, "Morph pad", false));
+    layout.add (percent ("morphX", "Morph X", 0.0f, 100.0f, 50.0f));
+    layout.add (percent ("morphY", "Morph Y", 0.0f, 100.0f, 50.0f));
 
     return layout;
 }
@@ -828,6 +844,22 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         master.process (buffer, numSamples, masterParams);
     }
 
+    // Mutate auto : une demande au thread message toutes les N mesures (4 temps)
+    if (mutateOnParam->load() > 0.5f && (playing || numHeld > 0))
+    {
+        const auto bar = (juce::int64) std::floor (blockStartBeat / 4.0);
+        if (bar != lastMutateBar)
+        {
+            if (lastMutateBar >= 0 && bar % juce::jmax (1, (int) mutateBarsParam->load()) == 0)
+                randomManager->mutateRequests.fetch_add (1);
+            lastMutateBar = bar;
+        }
+    }
+    else
+    {
+        lastMutateBar = -1;
+    }
+
     sampleCounter += numSamples;
     freeBeat = playing ? ppq + numSamples * beatsPerSample : freeBeat + numSamples * beatsPerSample;
 
@@ -929,9 +961,12 @@ void IDGemsSlicerProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.removeChild (state.getChildWithName (IDs::slots), nullptr);
     state.removeChild (state.getChildWithName (IDs::sequencer), nullptr);
     state.removeChild (state.getChildWithName (IDs::mapPath), nullptr);
+    state.removeChild (state.getChildWithName (IDs::random), nullptr);
     state.appendChild (sampleManager.toValueTree(), nullptr);
     state.appendChild (patternStore.toValueTree(), nullptr);
     state.appendChild (mapStore.toValueTree(), nullptr);
+    if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+        state.appendChild (randomManager->toValueTree(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -947,9 +982,11 @@ void IDGemsSlicerProcessor::setStateInformation (const void* data, int sizeInByt
             auto slots = tree.getChildWithName (IDs::slots);
             auto seq = tree.getChildWithName (IDs::sequencer);
             auto path = tree.getChildWithName (IDs::mapPath);
+            auto rnd = tree.getChildWithName (IDs::random);
             tree.removeChild (slots, nullptr);
             tree.removeChild (seq, nullptr);
             tree.removeChild (path, nullptr);
+            tree.removeChild (rnd, nullptr);
             apvts.replaceState (tree);
             if (tree.hasProperty (IDs::fxOrder))
                 setFxOrder (idg::FxChain::decodeOrder ((int) tree.getProperty (IDs::fxOrder)));
@@ -957,6 +994,16 @@ void IDGemsSlicerProcessor::setStateInformation (const void* data, int sizeInByt
 
             patternStore.fromValueTree (seq.isValid() ? seq : juce::ValueTree (IDs::sequencer));
             mapStore.fromValueTree (path.isValid() ? path : juce::ValueTree (IDs::mapPath));
+            if (rnd.isValid())
+            {
+                if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+                    randomManager->fromValueTree (rnd);
+                else
+                    juce::MessageManager::callAsync ([w = juce::WeakReference<idg::RandomManager> (randomManager.get()), rnd]
+                    {
+                        if (auto* rm = w.get()) rm->fromValueTree (rnd);
+                    });
+            }
         }
     }
 

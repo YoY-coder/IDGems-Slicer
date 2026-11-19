@@ -3,7 +3,7 @@
 Plugin instrument VST3 (MIDI → audio) de la famille IDGems : découpe de gros bounces de sound design
 en slices, jouées et séquencées au MIDI avec beaucoup de random.
 
-**État actuel : étapes 1 à 7 / 10**
+**État actuel : étapes 1 à 8 / 10**
 - 4 emplacements de samples (glisser-déposer ou bouton CHARGER), chacun avec sa couleur.
 - Découpe : transitoires (sensibilité), grille calée sur le tempo (1/4 à 1/64), parts égales,
   aléatoire (bouton RE-SLICE RANDOM), manuel (marqueurs à la souris). 16 à 256 slices.
@@ -31,8 +31,12 @@ en slices, jouées et séquencées au MIDI avec beaucoup de random.
   stutter synchro tempo (manuel ou auto), granulaire. Chaque module : on/off, dry/wet ;
   ordre modifiable par glisser-déposer. Envoi FX global ou pas par pas (lane ENVOI FX).
 - Master : OTT 3 bandes → soft clip → dry/wet global → limiteur, gain de sortie, vu-mètre.
+- Random (onglet RANDOM) : random général ou par section (aiguillage, découpe, carte, séquenceur,
+  voix, FX), dosage, plage min/max et cadenas par paramètre, cadenas par section, seed
+  reproductible, historique (retour / avant), modes « garder le groove » / « garder les sons »,
+  mutate automatique toutes les N mesures, morph pad XY entre 4 snapshots.
 - Tout est sauvegardé avec le projet Ableton (chemins des fichiers, slices exactes, pattern, trajet,
-  ordre des FX, réglages).
+  ordre des FX, cadenas et plages du random, snapshots du morph, réglages).
 
 ## Compilation automatique (sans rien installer)
 Chaque envoi de code sur GitHub compile le plugin Windows et lance les tests automatiques.
@@ -104,5 +108,7 @@ S'il y a `=== ECHEC ===`, copiez tout le texte de la fenêtre et envoyez-le-moi.
 | `Source/Engine/FxChain.*` | Modules FX IDGems |
 | `Source/Engine/Master.*` | OTT, soft clip, limiteur |
 | `Source/UI/FxView.*` | Onglet FX + master |
+| `Source/Engine/RandomManager.*` | Random, historique, mutate, morph |
+| `Source/UI/RandomView.*` | Onglet RANDOM |
 | `Tests/TestMain.cpp` | Tests automatiques du moteur |
 | `Resources/Fonts/` | Votre police (.ttf / .otf) pour les titres, embarquée dans le plugin |

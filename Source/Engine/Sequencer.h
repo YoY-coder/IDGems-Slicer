@@ -71,6 +71,9 @@ public:
     void resetLane (int lane);
     void randomiseLane (int lane, juce::Random&);
     void randomiseAll (juce::Random&);
+    // Re-tire une fraction "amount" des pas de la lane (mutation douce)
+    void mutateLane (int lane, juce::Random&, float amount);
+    static float randomValue (int lane, juce::Random&);
     void setPattern (const Pattern&);
 
     juce::ValueTree toValueTree() const;

@@ -156,31 +156,43 @@ void PatternStore::resetLane (int lane)
     publish();
 }
 
+float PatternStore::randomValue (int lane, juce::Random& r)
+{
+    const auto& info = laneInfo (lane);
+    float x = r.nextFloat();
+    switch (lane)
+    {
+        // Des tirages "musicaux" plutot qu'uniformes
+        case laneReverse:     x = x < 0.2f ? 1.0f : 0.0f; break;
+        case laneFreeze:      x = x < 0.12f ? 1.0f : 0.0f; break;
+        case lanePitch:       x = r.nextFloat() < 0.6f ? 0.5f : x; break;      // souvent 0 st
+        case laneRatchet:     x = r.nextFloat() < 0.7f ? 0.0f : x * 0.45f; break;
+        case laneProbability: x = 0.45f + 0.55f * x; break;
+        case laneVelocity:    x = 0.35f + 0.65f * x; break;
+        case laneGate:        x = 0.15f + 0.85f * x; break;
+        case laneStart:       x = r.nextFloat() < 0.6f ? 0.0f : x * 0.6f; break;
+        default: break;
+    }
+    float v = info.minValue + x * (info.maxValue - info.minValue);
+    if (info.discrete) v = (float) juce::roundToInt (v);
+    return v;
+}
+
 void PatternStore::randomiseLane (int lane, juce::Random& r)
 {
     if (! juce::isPositiveAndBelow (lane, numLanes)) return;
-    const auto& info = laneInfo (lane);
+    auto& l = edit.lanes[(size_t) lane];
+    for (auto& v : l.values) v = randomValue (lane, r);
+    l.enabled = true;
+    publish();
+}
+
+void PatternStore::mutateLane (int lane, juce::Random& r, float amount)
+{
+    if (! juce::isPositiveAndBelow (lane, numLanes) || amount <= 0.0f) return;
     auto& l = edit.lanes[(size_t) lane];
     for (auto& v : l.values)
-    {
-        float x = r.nextFloat();
-        switch (lane)
-        {
-            // Des tirages "musicaux" plutot qu'uniformes
-            case laneReverse:     x = x < 0.2f ? 1.0f : 0.0f; break;
-            case laneFreeze:      x = x < 0.12f ? 1.0f : 0.0f; break;
-            case lanePitch:       x = r.nextFloat() < 0.6f ? 0.5f : x; break;                      // souvent 0 st
-            case laneRatchet:     x = r.nextFloat() < 0.7f ? 0.0f : x * 0.45f; break;              // souvent x1
-            case laneProbability: x = 0.45f + 0.55f * x; break;
-            case laneVelocity:    x = 0.35f + 0.65f * x; break;
-            case laneGate:        x = 0.15f + 0.85f * x; break;
-            case laneStart:       x = r.nextFloat() < 0.6f ? 0.0f : x * 0.6f; break;
-            default: break;
-        }
-        v = info.minValue + x * (info.maxValue - info.minValue);
-        if (info.discrete) v = (float) juce::roundToInt (v);
-    }
-    l.enabled = true;
+        if (r.nextFloat() < amount) v = randomValue (lane, r);
     publish();
 }
 

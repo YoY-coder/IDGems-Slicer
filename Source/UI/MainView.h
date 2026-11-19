@@ -9,6 +9,7 @@
 #include "MapView.h"
 #include "VoiceView.h"
 #include "FxView.h"
+#include "RandomView.h"
 
 class IDGemsSlicerProcessor;
 
@@ -54,8 +55,9 @@ private:
     MapView mapView;
     VoiceView voiceView;
     FxView fxView;
+    RandomView randomView;
     PlayPanel playPanel;
-    juce::TextButton cutTab { "DECOUPE" }, seqTab { "SEQUENCEUR" }, mapTab { "CARTE" }, voiceTab { "VOIX" }, fxTab { "FX" };
+    juce::TextButton cutTab { "DECOUPE" }, seqTab { "SEQUENCEUR" }, mapTab { "CARTE" }, voiceTab { "VOIX" }, fxTab { "FX" }, randomTab { "RANDOM" };
     int currentTab = 0;
     juce::Rectangle<int> tabArea;
 

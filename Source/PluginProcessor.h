@@ -9,6 +9,7 @@
 #include "Engine/MapStore.h"
 #include "Engine/FxChain.h"
 #include "Engine/Master.h"
+#include "Engine/RandomManager.h"
 
 //==============================================================================
 // IDGems Slicer - moteur audio.
@@ -77,6 +78,7 @@ public:
     std::array<int, idg::numFxModules> getFxOrder() const { return idg::FxChain::decodeOrder (fxChain.order.load()); }
     void setFxOrder (const std::array<int, idg::numFxModules>&);
     const idg::FxChain& getFxChain() const noexcept { return fxChain; }
+    idg::RandomManager& getRandomManager() noexcept { return *randomManager; }
 
     // Position effective du curseur sur la carte (pour l'affichage)
     std::atomic<float> cursorX { 0.5f }, cursorY { 0.5f };
@@ -199,6 +201,10 @@ private:
                        *filterTypeParam = nullptr, *cutoffParam = nullptr, *resonanceParam = nullptr, *driveParam = nullptr,
                        *freezeOnParam = nullptr, *freezePosParam = nullptr, *freezeSizeParam = nullptr, *freezeFadeParam = nullptr;
     idg::VoiceEngine::LiveParams liveParams;
+
+    std::unique_ptr<idg::RandomManager> randomManager;
+    std::atomic<float> *mutateOnParam = nullptr, *mutateBarsParam = nullptr;
+    juce::int64 lastMutateBar = -1;
 
     idg::FxChain fxChain;
     idg::Master master;

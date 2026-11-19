@@ -554,6 +554,109 @@ void runTests (const juce::String& snapshotPath)
     check (onMessageThread ([&] { return proc2->getMapStore().get().count == 2; }), "trajet de la carte conserve");
     check (onMessageThread ([&] { return proc2->getFxOrder()[0] == 4 && proc2->getFxOrder()[4] == 0; }), "ordre de la chaine FX conserve");
 
+    // 12. Systeme de random (etape 8)
+    {
+        auto& rm = proc->getRandomManager();
+        auto norm = [&] (const char* id) { return proc->getAPVTS().getParameter (id)->getValue(); };
+        setParam (*proc, "randomAmount", 100.0f);
+        setParam (*proc, "randomMode", 0.0f);
+
+        // Cadenas + plage
+        onMessageThread ([&]
+        {
+            rm.setSettings ("cutoff", { false, 0.2f, 0.3f });
+            rm.setSettings ("drive", { true, 0.0f, 1.0f });
+        });
+        const float driveBefore = norm ("drive");
+        const float swingBefore = norm ("swing");
+        onMessageThread ([&] { rm.randomiseAll(); });
+        check (norm ("cutoff") >= 0.2f - 1.0e-3f && norm ("cutoff") <= 0.3f + 1.0e-3f, "random : plage min/max respectee");
+        check (juce::approximatelyEqual (norm ("drive"), driveBefore), "random : parametre verrouille intact");
+        juce::ignoreUnused (swingBefore);
+
+        // Cadenas de section
+        onMessageThread ([&] { rm.setSectionLocked (idg::secFx, true); });
+        const float crushBefore = norm ("crushBits");
+        onMessageThread ([&] { rm.randomiseAll(); });
+        check (juce::approximatelyEqual (norm ("crushBits"), crushBefore), "random : section FX verrouillee intacte");
+        onMessageThread ([&] { rm.setSectionLocked (idg::secFx, false); });
+
+        // Seed : meme numero = meme resultat
+        onMessageThread ([&] { rm.fixedSeed = true; rm.setSeed (424242); rm.randomiseSection (idg::secVoice); });
+        const float a1 = norm ("attack"), a2 = norm ("clickTime"), a3 = norm ("freezeSize");
+        onMessageThread ([&] { rm.goBack(); });
+        onMessageThread ([&] { rm.randomiseSection (idg::secVoice); });
+        check (juce::approximatelyEqual (norm ("attack"), a1) && juce::approximatelyEqual (norm ("clickTime"), a2)
+               && juce::approximatelyEqual (norm ("freezeSize"), a3), "seed fixe : le meme numero redonne le meme resultat");
+        onMessageThread ([&] { rm.fixedSeed = false; });
+
+        // Historique : retour en arriere
+        const float beforeRandom = norm ("decay");
+        onMessageThread ([&] { rm.randomiseSection (idg::secVoice); });
+        const float afterRandom = norm ("decay");
+        onMessageThread ([&] { rm.goBack(); });
+        check (! juce::approximatelyEqual (beforeRandom, afterRandom) && juce::approximatelyEqual (norm ("decay"), beforeRandom),
+               "historique : RETOUR restaure l'etat d'avant");
+        onMessageThread ([&] { rm.goForward(); });
+        check (juce::approximatelyEqual (norm ("decay"), afterRandom), "historique : AVANT reapplique le random");
+
+        // Garder le groove
+        setParam (*proc, "randomMode", 1.0f);
+        const float sw = norm ("swing");
+        const auto ratchetLane = onMessageThread ([&] { return proc->getPatternStore().get().lanes[idg::laneRatchet]; });
+        const float res = norm ("release");
+        onMessageThread ([&] { rm.randomiseAll(); });
+        const auto ratchetAfter = onMessageThread ([&] { return proc->getPatternStore().get().lanes[idg::laneRatchet]; });
+        check (juce::approximatelyEqual (norm ("swing"), sw) && ratchetAfter.values == ratchetLane.values && ! juce::approximatelyEqual (norm ("release"), res),
+               "garder le groove : rythme fige, sons randomises");
+        setParam (*proc, "randomMode", 0.0f);
+
+        // Mutate auto : toutes les mesures pendant qu'une note est tenue
+        setParam (*proc, "mutateOn", 1.0f);
+        setParam (*proc, "mutateBars", 1.0f);
+        setParam (*proc, "mutateRate", 30.0f);
+        {
+            const int before = rm.mutateRequests.load();
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer on, none, off;
+            on.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+            proc->processBlock (buf, on);
+            for (int i = 0; i < 400; ++i) proc->processBlock (buf, none);   // ~4,3 s = 2 mesures a 120 BPM
+            proc->processBlock (buf, off);
+            const int requests = rm.mutateRequests.load() - before;
+            const auto hist = onMessageThread ([&] { return rm.historyText(); });
+            juce::Thread::sleep (200);   // le thread message traite les demandes
+            check (requests >= 2 && requests <= 3, "mutate auto : une mutation par mesure (" + juce::String (requests) + " en ~2 mesures)");
+            juce::ignoreUnused (hist);
+        }
+        setParam (*proc, "mutateOn", 0.0f);
+
+        // Morph pad : A = coupure au minimum, D = coupure au maximum
+        onMessageThread ([&]
+        {
+            rm.setSettings ("cutoff", { false, 0.0f, 1.0f });
+            proc->getAPVTS().getParameter ("cutoff")->setValueNotifyingHost (0.0f);
+            rm.captureSnapshot (0);
+            proc->getAPVTS().getParameter ("cutoff")->setValueNotifyingHost (1.0f);
+            rm.captureSnapshot (3);
+        });
+        setParam (*proc, "morphOn", 1.0f);
+        setParam (*proc, "morphX", 0.0f);
+        setParam (*proc, "morphY", 100.0f);   // coin A (haut gauche)
+        waitFor ([&] { return norm ("cutoff") < 0.01f; }, 2000);
+        const float atA = norm ("cutoff");
+        setParam (*proc, "morphX", 100.0f);
+        setParam (*proc, "morphY", 0.0f);     // coin D (bas droite)
+        waitFor ([&] { return norm ("cutoff") > 0.99f; }, 2000);
+        const float atD = norm ("cutoff");
+        setParam (*proc, "morphX", 50.0f);
+        setParam (*proc, "morphY", 50.0f);
+        waitFor ([&] { return std::abs (norm ("cutoff") - 0.5f) < 0.05f; }, 2000);
+        check (atA < 0.01f && atD > 0.99f && std::abs (norm ("cutoff") - 0.5f) < 0.05f, "morph pad : interpolation entre les snapshots A et D");
+        setParam (*proc, "morphOn", 0.0f);
+    }
+
     // 9. Capture de l'interface
     if (snapshotPath.isNotEmpty())
     {
@@ -564,10 +667,10 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "selectMode", 1.0f);
         setParam (*proc, "mapAxisX", 0.0f);
         setParam (*proc, "mapAxisY", 1.0f);
-        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix", "fx" })
+        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix", "fx", "random" })
         onMessageThread ([&]
         {
-            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : juce::String (tab) == "fx" ? 4 : 0);
+            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : juce::String (tab) == "fx" ? 4 : juce::String (tab) == "random" ? 5 : 0);
             std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
             ed->setSize (1280, 800);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
