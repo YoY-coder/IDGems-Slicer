@@ -15,7 +15,7 @@ namespace
         { "VELOCITE", "Volume du pas",                                                                0.0f, 1.0f, 1.0f, false, true  },
         { "RATCHET",  "Nombre de repetitions dans le pas",                                            1.0f, 8.0f, 1.0f, true,  true  },
         { "PROBA",    "Probabilite que le pas se declenche",                                          0.0f, 1.0f, 1.0f, false, true  },
-        { "FREEZE",   "Slice Freeze sur ce pas (actif a l'etape 6)",                                  0.0f, 1.0f, 0.0f, true,  true  },
+        { "FREEZE",   "Slice Freeze sur ce pas (fige un grain et le boucle, voir onglet VOIX)",                                  0.0f, 1.0f, 0.0f, true,  true  },
         { "ENVOI FX", "Envoi vers la chaine FX sur ce pas (actif a l'etape 7)",                       0.0f, 1.0f, 0.0f, false, true  },
     };
 

@@ -63,6 +63,23 @@ IDGemsSlicerProcessor::IDGemsSlicerProcessor()
     pathLengthParam  = p ("pathLength");
     pathModeParam    = p ("pathMode");
     mapSpreadParam   = p ("mapSpread");
+    attackParam      = p ("attack");
+    decayParam       = p ("decay");
+    sustainParam     = p ("sustain");
+    releaseParam     = p ("release");
+    clickAmountParam = p ("clickAmount");
+    clickTimeParam   = p ("clickTime");
+    playStartParam   = p ("playStart");
+    playLengthParam  = p ("playLength");
+    reverseParam     = p ("reverse");
+    filterTypeParam  = p ("filterType");
+    cutoffParam      = p ("cutoff");
+    resonanceParam   = p ("resonance");
+    driveParam       = p ("drive");
+    freezeOnParam    = p ("freezeOn");
+    freezePosParam   = p ("freezePos");
+    freezeSizeParam  = p ("freezeSize");
+    freezeFadeParam  = p ("freezeFade");
 
     apvts.state.setProperty (IDs::editorWidth,  baseWidth,  nullptr);
     apvts.state.setProperty (IDs::editorHeight, baseHeight, nullptr);
@@ -147,14 +164,45 @@ juce::AudioProcessorValueTreeState::ParameterLayout IDGemsSlicerProcessor::creat
                                                         idg::pathModeNames(), 0));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "mapSpread", 1 }, "Carte : etaler", true));
 
+    // Voix (etape 6)
+    auto ms = [] (const String& id, const String& name, float lo, float hi, float def, float skew)
+    {
+        return std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name,
+                                                      NormalisableRange<float> (lo, hi, 0.1f, skew), def,
+                                                      AudioParameterFloatAttributes().withLabel ("ms"));
+    };
+    layout.add (ms ("attack", "Attaque", 0.0f, 2000.0f, 1.0f, 0.3f));
+    layout.add (ms ("decay", "Decroissance", 1.0f, 3000.0f, 200.0f, 0.3f));
+    layout.add (percent ("sustain", "Maintien", 0.0f, 100.0f, 100.0f));
+    layout.add (ms ("release", "Relachement", 1.0f, 5000.0f, 30.0f, 0.3f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "clickAmount", 1 }, "Pitch clic : quantite",
+                                                       NormalisableRange<float> (0.0f, 48.0f, 0.1f), 0.0f,
+                                                       AudioParameterFloatAttributes().withLabel ("st")));
+    layout.add (ms ("clickTime", "Pitch clic : duree", 1.0f, 300.0f, 25.0f, 0.5f));
+    layout.add (percent ("playStart", "Start", 0.0f, 95.0f, 0.0f));
+    layout.add (percent ("playLength", "Longueur", 2.0f, 100.0f, 100.0f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "reverse", 1 }, "Reverse", false));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "filterType", 1 }, "Filtre : type",
+                                                        StringArray { "Off", "Passe-bas", "Passe-haut", "Passe-bande" }, 0));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "cutoff", 1 }, "Filtre : frequence",
+                                                       NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.25f), 20000.0f,
+                                                       AudioParameterFloatAttributes().withLabel ("Hz")));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "resonance", 1 }, "Filtre : resonance",
+                                                       NormalisableRange<float> (0.5f, 10.0f, 0.01f, 0.4f), 0.707f));
+    layout.add (percent ("drive", "Drive", 0.0f, 100.0f, 0.0f));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "freezeOn", 1 }, "Slice Freeze", false));
+    layout.add (percent ("freezePos", "Freeze : position", 0.0f, 100.0f, 30.0f));
+    layout.add (ms ("freezeSize", "Freeze : taille du grain", 5.0f, 1000.0f, 80.0f, 0.4f));
+    layout.add (percent ("freezeFade", "Freeze : fondu", 0.0f, 100.0f, 40.0f));
+
     return layout;
 }
 
 //==============================================================================
-void IDGemsSlicerProcessor::prepareToPlay (double sampleRate, int)
+void IDGemsSlicerProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate > 0 ? sampleRate : 44100.0;
-    engine.prepare (currentSampleRate);
+    engine.prepare (currentSampleRate, juce::jmax (512, samplesPerBlock));
     outputGain.reset (currentSampleRate, 0.05);
     outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGainDb->load()));
     numPending = 0;
@@ -206,9 +254,15 @@ void IDGemsSlicerProcessor::fire (const Trigger& t) noexcept
     p.polyphony = (int) polyphonyParam->load();
     p.fadeSeconds = fadeParam->load() * 0.001;
     p.normalise = normalizeParam->load() > 0.5f;
-    p.reverse = t.reverse;
-    p.startFraction = t.startFraction;
+    p.reverse = t.reverse != (reverseParam->load() > 0.5f);   // reverse global inverse le sens
+    p.startFraction = juce::jmin (0.95f, t.startFraction + playStartParam->load() * 0.01f);
+    p.lengthFraction = playLengthParam->load() * 0.01f;
     p.gateSamples = t.gateSamples;
+    p.adsr = { attackParam->load() * 0.001f, decayParam->load() * 0.001f,
+               sustainParam->load() * 0.01f, releaseParam->load() * 0.001f };
+    p.clickSemitones = clickAmountParam->load();
+    p.clickSeconds = clickTimeParam->load() * 0.001f;
+    p.freeze = t.freeze || freezeOnParam->load() > 0.5f;
     engine.noteOn (data, p);
 
     lastTriggerSlot.store (t.slot);
@@ -268,6 +322,7 @@ void IDGemsSlicerProcessor::buildTriggers (const TriggerRequest& r, juce::int64 
     t.startFraction = r.startFraction;
     t.reverse = r.reverse;
     t.oneShot = r.oneShot;
+    t.freeze = r.freeze;
     t.gateSamples = r.gateSamples;
 
     const int count = mode == modeChord ? juce::jlimit (2, maxChord, (int) chordCountParam->load()) : 1;
@@ -416,6 +471,7 @@ void IDGemsSlicerProcessor::fireSequencerStep (juce::int64 step, juce::int64 tim
     r.extraSemitones = pattern.valueAt (idg::lanePitch, step);
     r.startFraction = pattern.valueAt (idg::laneStart, step);
     r.reverse = pattern.valueAt (idg::laneReverse, step) > 0.5f;
+    r.freeze = pattern.valueAt (idg::laneFreeze, step) > 0.5f;
     r.oneShot = oneShotParam->load() > 0.5f;
     r.gateSamples = r.oneShot ? -1 : juce::jmax (64, (int) (pattern.valueAt (idg::laneGate, step) * spacing));
     r.voiceNote = sequencerNote;
@@ -462,13 +518,13 @@ void IDGemsSlicerProcessor::processSegment (juce::AudioBuffer<float>& buffer, in
         if (idx < 0) break;
 
         const int at = (int) juce::jlimit ((juce::int64) cursor, (juce::int64) end, pending[(size_t) idx].time - sampleCounter);
-        if (at > cursor) { engine.render (buffer, cursor, at - cursor); cursor = at; }
+        if (at > cursor) { engine.render (buffer, cursor, at - cursor, liveParams); cursor = at; }
 
         const auto t = pending[(size_t) idx].trigger;
         pending[(size_t) idx] = pending[(size_t) --numPending];
         fire (t);
     }
-    if (cursor < end) engine.render (buffer, cursor, end - cursor);
+    if (cursor < end) engine.render (buffer, cursor, end - cursor, liveParams);
 }
 
 //==============================================================================
@@ -563,6 +619,15 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int numSamples = buffer.getNumSamples();
 
     sampleManager.updateAudioCache (audioSlots);
+
+    // Reglages de voix modulables en temps reel (filtre, drive, freeze)
+    liveParams.filterType = (int) filterTypeParam->load();
+    liveParams.cutoff = cutoffParam->load();
+    liveParams.resonance = resonanceParam->load();
+    liveParams.drive = driveParam->load() * 0.01f;
+    liveParams.freezePosition = freezePosParam->load() * 0.01f;
+    liveParams.freezeSeconds = freezeSizeParam->load() * 0.001f;
+    liveParams.freezeFade = freezeFadeParam->load() * 0.01f;
     patternStore.pull (pattern, patternVersion);
     mapStore.pull (mapPath, mapPathVersion);
     sampleManager.pullSpreadTable (spreadTable, spreadVersion);

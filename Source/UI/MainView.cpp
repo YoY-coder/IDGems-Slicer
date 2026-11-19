@@ -4,7 +4,7 @@
 #include "../PluginProcessor.h"
 
 MainView::MainView (IDGemsSlicerProcessor& p)
-    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), playPanel (p)
+    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), voiceView (p), playPanel (p)
 {
     for (int i = 0; i < 4; ++i)
     {
@@ -15,10 +15,11 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     addChildComponent (sliceEditor);
     addChildComponent (sequencerView);
     addChildComponent (mapView);
+    addChildComponent (voiceView);
     addAndMakeVisible (playPanel);
 
     int tabIndex = 0;
-    for (auto* b : { &cutTab, &seqTab, &mapTab })
+    for (auto* b : { &cutTab, &seqTab, &mapTab, &voiceTab })
     {
         b->setRadioGroupId (1001);
         b->setClickingTogglesState (false);
@@ -29,6 +30,7 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     cutTab.setTooltip ("Decoupe du sample selectionne");
     seqTab.setTooltip ("Sequenceur polyrythmique (une lane par parametre)");
     mapTab.setTooltip ("Carte des slices des 4 samples (Slice Select XY, trajets)");
+    voiceTab.setTooltip ("Reglages des voix : enveloppe, pitch clic, filtre, Slice Freeze");
     processor.getSampleManager().addChangeListener (this);
 
     setSize (IDGemsSlicerProcessor::baseWidth, IDGemsSlicerProcessor::baseHeight);
@@ -72,12 +74,14 @@ void MainView::selectSlot (int s)
 
 void MainView::selectTab (int t)
 {
-    currentTab = juce::jlimit (0, 2, t);
+    currentTab = juce::jlimit (0, 3, t);
     processor.setUiProperty ("selectedTab", currentTab);
     cutTab.setToggleState (currentTab == 0, juce::dontSendNotification);
     seqTab.setToggleState (currentTab == 1, juce::dontSendNotification);
     mapTab.setToggleState (currentTab == 2, juce::dontSendNotification);
     mapView.setVisible (currentTab == 2);
+    voiceTab.setToggleState (currentTab == 3, juce::dontSendNotification);
+    voiceView.setVisible (currentTab == 3);
     sliceEditor.setVisible (currentTab == 0);
     sequencerView.setVisible (currentTab == 1);
     if (currentTab == 1) sequencerView.refresh();
@@ -154,10 +158,13 @@ void MainView::resized()
         seqTab.setBounds (t.removeFromLeft (130));
         t.removeFromLeft (4);
         mapTab.setBounds (t.removeFromLeft (130));
+        t.removeFromLeft (4);
+        voiceTab.setBounds (t.removeFromLeft (130));
         m.removeFromTop (4);
         sliceEditor.setBounds (m);
         sequencerView.setBounds (m);
         mapView.setBounds (m);
+        voiceView.setBounds (m);
     }
     playPanel.setBounds (fxArea);
 

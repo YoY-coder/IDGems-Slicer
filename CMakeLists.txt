@@ -52,6 +52,7 @@ target_sources(IDGemsSlicer
         Source/UI/PlayPanel.cpp
         Source/UI/SequencerView.cpp
         Source/UI/MapView.cpp
+        Source/UI/VoiceView.cpp
         Source/Engine/Slicer.cpp
         Source/Engine/SampleManager.cpp
         Source/Engine/VoiceEngine.cpp

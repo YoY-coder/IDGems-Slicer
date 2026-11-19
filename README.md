@@ -3,7 +3,7 @@
 Plugin instrument VST3 (MIDI → audio) de la famille IDGems : découpe de gros bounces de sound design
 en slices, jouées et séquencées au MIDI avec beaucoup de random.
 
-**État actuel : étapes 1 à 5 / 10**
+**État actuel : étapes 1 à 6 / 10**
 - 4 emplacements de samples (glisser-déposer ou bouton CHARGER), chacun avec sa couleur.
 - Découpe : transitoires (sensibilité), grille calée sur le tempo (1/4 à 1/64), parts égales,
   aléatoire (bouton RE-SLICE RANDOM), manuel (marqueurs à la souris). 16 à 256 slices.
@@ -24,6 +24,9 @@ en slices, jouées et séquencées au MIDI avec beaucoup de random.
   du curseur dans le sample choisi par l'aiguillage ; rayon réglable (plus grand = plus aléatoire).
   Trajets dessinés à la souris, parcourus en rythme (aller simple, ping-pong, random).
   Clic sur un point = pré-écoute.
+- Réglages des voix (onglet VOIX) : ADSR, pitch « clic », start / longueur / reverse,
+  filtre passe-bas / passe-haut / passe-bande + drive, Slice Freeze (grain bouclé : position,
+  taille, fondu), activable partout ou pas par pas (lane FREEZE).
 - Tout est sauvegardé avec le projet Ableton (chemins des fichiers, slices exactes, pattern, trajet, réglages).
 
 ## Compilation automatique (sans rien installer)
@@ -92,5 +95,6 @@ S'il y a `=== ECHEC ===`, copiez tout le texte de la fenêtre et envoyez-le-moi.
 | `Source/Engine/SliceAnalysis.*` | Analyse des slices (centroïde, platitude, YIN...) |
 | `Source/Engine/MapStore.*` | Trajets de la carte |
 | `Source/UI/MapView.*` | Carte des slices |
+| `Source/UI/VoiceView.*` | Réglages des voix |
 | `Tests/TestMain.cpp` | Tests automatiques du moteur |
 | `Resources/Fonts/` | Votre police (.ttf / .otf) pour les titres, embarquée dans le plugin |

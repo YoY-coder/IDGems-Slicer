@@ -4,7 +4,6 @@ namespace idg
 {
 namespace
 {
-    constexpr double gateReleaseSeconds  = 0.030;   // relachement de note (sera l'ADSR a l'etape 6)
     constexpr double stealReleaseSeconds = 0.004;   // fondu rapide quand une voix est volee
 
     inline float hermite (float xm1, float x0, float x1, float x2, float t) noexcept
@@ -16,54 +15,78 @@ namespace
         const float b = w + a;
         return ((((a * t) - b) * t + c) * t + x0);
     }
+
+    struct Reader
+    {
+        const float* src[2];
+        int len;
+
+        inline float read (int ch, double pos) const noexcept
+        {
+            const int i0 = (int) std::floor (pos);
+            const float t = (float) (pos - (double) i0);
+            auto at = [this, ch] (int i) noexcept { return src[ch][i < 0 ? 0 : (i >= len ? len - 1 : i)]; };
+            return hermite (at (i0 - 1), at (i0), at (i0 + 1), at (i0 + 2), t);
+        }
+    };
 }
 
-void VoiceEngine::prepare (double sr)
+void VoiceEngine::prepare (double sr, int maxBlockSize)
 {
     sampleRate = sr > 0 ? sr : 44100.0;
+    const juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) juce::jmax (1, maxBlockSize), 2 };
+    for (auto& v : voices)
+    {
+        v.filter.prepare (spec);
+        v.adsr.setSampleRate (sampleRate);
+    }
     allNotesOff (true);
 }
 
-void VoiceEngine::startRelease (Voice& v, double seconds) noexcept
+void VoiceEngine::steal (Voice& v) noexcept
 {
     if (! v.active) return;
-    const float steps = (float) juce::jmax (1.0, seconds * sampleRate);
-    const float step = v.release / steps;
-    if (! v.releasing || step > v.releaseStep)
-        v.releaseStep = step;
-    v.releasing = true;
+    v.stealing = true;
     v.held = false;
+    v.stealStep = (float) (1.0 / juce::jmax (1.0, stealReleaseSeconds * sampleRate));
+}
+
+void VoiceEngine::release (Voice& v) noexcept
+{
+    if (! v.active) return;
+    v.held = false;
+    v.adsr.noteOff();
 }
 
 void VoiceEngine::stopVoice (Voice& v) noexcept
 {
-    v.active = v.held = v.releasing = false;
+    v.active = v.held = v.stealing = false;
     v.data = nullptr;   // le release pool garde une reference : pas de liberation ici
     v.note = -1;
     v.slot = -1;
+    v.adsr.reset();
 }
 
 void VoiceEngine::noteOn (const SampleData::Ptr& data, const NoteParams& p) noexcept
 {
     if (data == nullptr || data->slices.empty()) return;
 
-    // Limite de polyphonie : on relache rapidement les plus anciennes voix
+    // Limite de polyphonie : fondu rapide des plus anciennes voix
     const int poly = juce::jlimit (1, 16, p.polyphony);
     for (;;)
     {
         int playing = 0;
         Voice* oldest = nullptr;
         for (auto& v : voices)
-            if (v.active && ! v.releasing)
+            if (v.active && ! v.stealing)
             {
                 ++playing;
                 if (oldest == nullptr || v.age < oldest->age) oldest = &v;
             }
         if (playing < poly || oldest == nullptr) break;
-        startRelease (*oldest, stealReleaseSeconds);
+        steal (*oldest);
     }
 
-    // Voix libre, sinon la plus ancienne en relachement
     Voice* target = nullptr;
     for (auto& v : voices)
         if (! v.active) { target = &v; break; }
@@ -72,25 +95,47 @@ void VoiceEngine::noteOn (const SampleData::Ptr& data, const NoteParams& p) noex
             if (target == nullptr || v.age < target->age) target = &v;
 
     const auto& slice = data->slices[(size_t) juce::jlimit (0, data->numSlices() - 1, p.slice)];
+    const int sliceLen = slice.end - slice.start;
+    const int playLen = juce::jmax (32, (int) (sliceLen * juce::jlimit (0.02f, 1.0f, p.lengthFraction)));
+
     auto& v = *target;
     v.data = data;
     v.active = true;
     v.held = ! p.oneShot;
-    v.releasing = false;
+    v.stealing = false;
+    v.steal = 1.0f;
     v.slot = p.slot;
     v.note = p.note;
-    v.start = slice.start;
-    v.end = slice.end;
+    v.sliceStart = slice.start;
+    v.sliceEnd = slice.end;
     v.reverse = p.reverse;
-    const double offset = (double) juce::jlimit (0.0f, 0.95f, p.startFraction) * (slice.end - slice.start);
-    v.pos = p.reverse ? (double) slice.end - 1.0 - offset : (double) slice.start + offset;
-    v.inc = juce::jlimit (0.01, 16.0, p.pitchRatio) * (p.reverse ? -1.0 : 1.0);
-    v.gateRemaining = p.gateSamples;
+    v.start = p.reverse ? slice.end - playLen : slice.start;
+    v.end = p.reverse ? slice.end : slice.start + playLen;
+
+    const double offset = (double) juce::jlimit (0.0f, 0.95f, p.startFraction) * playLen;
+    v.pos = p.reverse ? (double) v.end - 1.0 - offset : (double) v.start + offset;
     v.startPos = v.pos;
+    v.inc = juce::jlimit (0.01, 16.0, p.pitchRatio);
+    v.gateRemaining = p.gateSamples;
     v.gain = p.velocity * (p.normalise ? slice.normGain : 1.0f);
-    v.fadeLen = (float) juce::jmin (p.fadeSeconds * data->audio->sampleRate, (double) (slice.end - slice.start) * 0.5);
-    v.release = 1.0f;
-    v.releaseStep = 0.0f;
+    v.fadeLen = (float) juce::jmin (p.fadeSeconds * data->audio->sampleRate, (double) playLen * 0.5);
+
+    v.adsr.setParameters (p.adsr);
+    v.adsr.reset();
+    v.adsr.noteOn();
+
+    v.clickSemis = p.clickSemitones;
+    v.clickEnv = 1.0f;
+    v.clickDecay = (float) std::exp (-1.0 / juce::jmax (1.0, p.clickSeconds * sampleRate));
+
+    v.freeze = p.freeze;
+    v.grainPhase = 0.0;
+    v.played = 0.0f;
+    // Un freeze en one-shot dure la longueur (jouee) de la slice
+    v.oneShotRemaining = (p.freeze && p.oneShot) ? (juce::int64) (playLen / v.inc) : -1;
+
+    v.filter.reset();
+    v.filterTypeSet = -1;
     v.age = ++ageCounter;
 }
 
@@ -98,7 +143,7 @@ void VoiceEngine::noteOff (int note) noexcept
 {
     for (auto& v : voices)
         if (v.active && v.held && v.note == note)
-            startRelease (v, gateReleaseSeconds);
+            release (v);
 }
 
 void VoiceEngine::allNotesOff (bool immediate) noexcept
@@ -106,13 +151,15 @@ void VoiceEngine::allNotesOff (bool immediate) noexcept
     for (auto& v : voices)
     {
         if (immediate) stopVoice (v);
-        else           startRelease (v, gateReleaseSeconds);
+        else           release (v);
     }
 }
 
-void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num) noexcept
+void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num, const LiveParams& lp) noexcept
 {
     const int outCh = out.getNumChannels();
+    const float driveGain = 1.0f + lp.drive * 24.0f;
+    const float driveComp = 1.0f / (1.0f + lp.drive * 3.0f);
 
     for (size_t vi = 0; vi < voices.size(); ++vi)
     {
@@ -124,53 +171,113 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, int start, int num) noe
         }
 
         const auto& buf = v.data->audio->buffer;
-        const int len = buf.getNumSamples();
-        const float* src[2] = { buf.getReadPointer (0), buf.getReadPointer (1) };
-        auto clampIdx = [len] (int i) noexcept { return i < 0 ? 0 : (i >= len ? len - 1 : i); };
+        const Reader rd { { buf.getReadPointer (0), buf.getReadPointer (1) }, buf.getNumSamples() };
+        const double fileRate = v.data->audio->sampleRate;
+
+        // Filtre (type et coefficients mis a jour a chaque bloc)
+        const bool useFilter = lp.filterType > 0;
+        if (useFilter)
+        {
+            if (v.filterTypeSet != lp.filterType)
+            {
+                using T = juce::dsp::StateVariableTPTFilterType;
+                v.filter.setType (lp.filterType == 1 ? T::lowpass : lp.filterType == 2 ? T::highpass : T::bandpass);
+                v.filterTypeSet = lp.filterType;
+            }
+            v.filter.setCutoffFrequency (juce::jlimit (20.0f, (float) (sampleRate * 0.45), lp.cutoff));
+            v.filter.setResonance (juce::jmax (0.5f, lp.resonance));
+        }
+
+        // Grain du freeze
+        const int sliceLen = v.sliceEnd - v.sliceStart;
+        const double grainLen = juce::jlimit (32.0, (double) juce::jmax (64, sliceLen), lp.freezeSeconds * fileRate);
+        const double grainStart = v.sliceStart + juce::jlimit (0.0, 1.0, (double) lp.freezePosition) * juce::jmax (0.0, sliceLen - grainLen);
+        const double xfade = juce::jmax (8.0, grainLen * 0.5 * juce::jlimit (0.0f, 1.0f, lp.freezeFade));
 
         for (int n = 0; n < num; ++n)
         {
-            if (v.pos >= (double) v.end || v.pos < (double) v.start || v.release <= 0.0f)
+            const bool endReached = ! v.freeze && (v.pos >= (double) v.end || v.pos < (double) v.start);
+            if (endReached || ! v.adsr.isActive() || v.steal <= 0.0f || v.oneShotRemaining == 0)
             {
                 stopVoice (v);
                 break;
             }
 
-            const int i0 = (int) v.pos;
-            const float t = (float) (v.pos - (double) i0);
-
-            float env = 1.0f;
+            // Enveloppe : fondus anti-clic, ADSR, vol de voix
+            float env = v.adsr.getNextSample();
             if (v.fadeLen > 1.0f)
             {
-                // fondu d'entree depuis le point de depart reel, fondu de sortie avant le bord de la slice
-                const float fromStart = (float) std::abs (v.pos - v.startPos);
-                const float toEnd = (float) (v.reverse ? v.pos - (double) v.start : (double) v.end - v.pos);
-                env = juce::jmin (1.0f, fromStart / v.fadeLen, toEnd / v.fadeLen);
+                float e = v.played / v.fadeLen;
+                if (! v.freeze)
+                {
+                    const float toEnd = (float) (v.reverse ? v.pos - (double) v.start : (double) v.end - v.pos);
+                    e = juce::jmin (e, toEnd / v.fadeLen);
+                }
+                env *= juce::jmin (1.0f, e);
             }
-            if (v.gateRemaining > 0 && --v.gateRemaining == 0)
-                startRelease (v, gateReleaseSeconds * 0.5);
+            if (v.stealing) { env *= v.steal; v.steal -= v.stealStep; }
+            if (v.gateRemaining > 0 && --v.gateRemaining == 0) release (v);
+            if (v.oneShotRemaining > 0) --v.oneShotRemaining;
 
-            if (v.releasing)
+            // Pitch "clic" : la lecture demarre plus vite puis revient a la normale
+            double inc = v.inc;
+            if (v.clickSemis != 0.0f && v.clickEnv > 1.0e-4f)
             {
-                env *= v.release;
-                v.release -= v.releaseStep;
+                inc *= std::exp2 ((double) (v.clickSemis * v.clickEnv) / 12.0);
+                v.clickEnv *= v.clickDecay;
             }
 
             const float g = v.gain * env;
             for (int ch = 0; ch < outCh; ++ch)
             {
-                const float* s = src[ch < 2 ? ch : 1];
-                const float smp = hermite (s[clampIdx (i0 - 1)], s[clampIdx (i0)],
-                                           s[clampIdx (i0 + 1)], s[clampIdx (i0 + 2)], t);
+                const int c = ch < 2 ? ch : 1;
+                float smp;
+                if (v.freeze)
+                {
+                    // Boucle du grain avec fondu enchaine en fin de boucle
+                    const double p = v.grainPhase;
+                    smp = rd.read (c, grainStart + p);
+                    if (p > grainLen - xfade)
+                    {
+                        const float t = (float) ((p - (grainLen - xfade)) / xfade);
+                        smp = smp * std::sqrt (1.0f - t) + rd.read (c, grainStart + p - grainLen) * std::sqrt (t);
+                    }
+                }
+                else
+                {
+                    smp = rd.read (c, v.pos);
+                }
+
+                if (useFilter)
+                {
+                    if (lp.drive > 0.0f) smp = std::tanh (smp * driveGain) * driveComp;
+                    smp = v.filter.processSample (c, smp);
+                }
+                else if (lp.drive > 0.0f)
+                {
+                    smp = std::tanh (smp * driveGain) * driveComp;
+                }
+
                 out.addSample (ch, start + n, smp * g);
             }
-            v.pos += v.inc;
+
+            if (v.played < 1.0e6f) v.played += (float) inc;
+            if (v.freeze)
+            {
+                v.grainPhase += inc;
+                if (v.grainPhase >= grainLen) v.grainPhase -= grainLen;
+                v.pos = grainStart + v.grainPhase;
+            }
+            else
+            {
+                v.pos += v.reverse ? -inc : inc;
+            }
         }
 
         if (v.active)
         {
             display[vi].slot.store (v.slot, std::memory_order_relaxed);
-            display[vi].position.store ((float) (v.pos / (double) juce::jmax (1, len)), std::memory_order_relaxed);
+            display[vi].position.store ((float) (v.pos / (double) juce::jmax (1, rd.len)), std::memory_order_relaxed);
         }
         else
         {

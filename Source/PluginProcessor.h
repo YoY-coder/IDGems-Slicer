@@ -96,7 +96,7 @@ private:
     {
         int slot = -1, slice = 0, note = -1;
         float velocity = 1.0f, semitones = 0.0f, startFraction = 0.0f;
-        bool reverse = false, oneShot = false;
+        bool reverse = false, oneShot = false, freeze = false;
         int gateSamples = -1;
     };
 
@@ -112,6 +112,7 @@ private:
         float startFraction = 0.0f;
         bool reverse = false;
         bool oneShot = false;
+        bool freeze = false;           // lane Freeze du sequenceur
         int gateSamples = -1;
         int voiceNote = -1;            // note utilisee pour le relachement
     };
@@ -182,7 +183,13 @@ private:
                        *seqOnParam = nullptr, *seqRateParam = nullptr, *swingParam = nullptr, *grooveParam = nullptr,
                        *selectModeParam = nullptr, *mapXParam = nullptr, *mapYParam = nullptr, *mapRadiusParam = nullptr,
                        *mapAxisXParam = nullptr, *mapAxisYParam = nullptr, *pathOnParam = nullptr,
-                       *pathLengthParam = nullptr, *pathModeParam = nullptr, *mapSpreadParam = nullptr;
+                       *pathLengthParam = nullptr, *pathModeParam = nullptr, *mapSpreadParam = nullptr,
+                       *attackParam = nullptr, *decayParam = nullptr, *sustainParam = nullptr, *releaseParam = nullptr,
+                       *clickAmountParam = nullptr, *clickTimeParam = nullptr,
+                       *playStartParam = nullptr, *playLengthParam = nullptr, *reverseParam = nullptr,
+                       *filterTypeParam = nullptr, *cutoffParam = nullptr, *resonanceParam = nullptr, *driveParam = nullptr,
+                       *freezeOnParam = nullptr, *freezePosParam = nullptr, *freezeSizeParam = nullptr, *freezeFadeParam = nullptr;
+    idg::VoiceEngine::LiveParams liveParams;
 
     // Pre-ecoute (interface -> audio), sans allocation
     struct PreviewRequest { int slot, slice; };

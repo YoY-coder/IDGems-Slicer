@@ -6,6 +6,7 @@
 #include "PluginEditor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <set>
+#include <algorithm>
 
 namespace
 {
@@ -123,6 +124,33 @@ int holdNote (IDGemsSlicerProcessor& p, int note, int numBlocks, bool release = 
         p.processBlock (buf, midi);
     }
     return p.triggerCounter.load() - before;
+}
+
+// Joue une note, la tient numBlocks blocs ; renvoie la crete de chaque bloc
+std::vector<float> blockPeaks (IDGemsSlicerProcessor& p, int note, int numBlocks)
+{
+    std::vector<float> peaks;
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi, none, off;
+    midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 110), 0);
+    off.addEvent (juce::MidiMessage::noteOff (1, note), 0);
+    for (int i = 0; i < numBlocks; ++i)
+    {
+        p.processBlock (buf, i == 0 ? midi : none);
+        float pk = buf.getMagnitude (0, 512);
+        for (int s = 0; s < 512; ++s) if (! std::isfinite (buf.getSample (0, s))) pk = -1.0f;
+        peaks.push_back (pk);
+    }
+    p.processBlock (buf, off);
+    for (int i = 0; i < 40; ++i) p.processBlock (buf, none);   // laisse s'eteindre
+    return peaks;
+}
+
+int lastAudibleBlock (const std::vector<float>& peaks)
+{
+    int last = -1;
+    for (size_t i = 0; i < peaks.size(); ++i) if (peaks[i] > 0.002f) last = (int) i;
+    return last;
 }
 
 void runTests (const juce::String& snapshotPath)
@@ -351,6 +379,57 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "seqOn", 0.0f);
     }
 
+    // 10b. Reglages de voix (etape 6)
+    {
+        setParam (*proc, "playMode", 0.0f);
+        setParam (*proc, "keySource", 1.0f);   // sample 1, slices de ~250 ms
+        setParam (*proc, "seqOn", 0.0f);
+
+        const auto ref = blockPeaks (*proc, 36, 60);
+        const int refEnd = lastAudibleBlock (ref);
+
+        setParam (*proc, "attack", 200.0f);
+        const auto slow = blockPeaks (*proc, 36, 60);
+        setParam (*proc, "attack", 1.0f);
+        check (slow[0] < ref[0] * 0.2f, "ADSR : attaque lente = debut doux (" + juce::String (slow[0], 3) + " vs " + juce::String (ref[0], 3) + ")");
+
+        setParam (*proc, "playLength", 50.0f);
+        const int halfEnd = lastAudibleBlock (blockPeaks (*proc, 36, 60));
+        setParam (*proc, "playLength", 100.0f);
+        check (halfEnd > 0 && halfEnd < refEnd * 0.7, "longueur 50 % : la slice s'arrete plus tot (bloc " + juce::String (halfEnd) + " / " + juce::String (refEnd) + ")");
+
+        setParam (*proc, "freezeOn", 1.0f);
+        setParam (*proc, "freezePos", 10.0f);
+        setParam (*proc, "freezeSize", 40.0f);
+        const auto frozen = blockPeaks (*proc, 36, 150);
+        setParam (*proc, "freezeOn", 0.0f);
+        check (refEnd < 40 && frozen[140] > 0.01f,
+               "Slice Freeze : le grain boucle tant que la note est tenue (crete " + juce::String (frozen[140], 3) + " apres 1,5 s)");
+        check (std::all_of (frozen.begin(), frozen.end(), [] (float v) { return v >= 0.0f; }), "Slice Freeze : audio propre");
+
+        // Filtre : un passe-haut a 3 kHz attenue fortement une frappe a 110 Hz
+        setParam (*proc, "filterType", 2.0f);
+        setParam (*proc, "cutoff", 3000.0f);
+        const auto hp = blockPeaks (*proc, 36, 20);
+        setParam (*proc, "filterType", 0.0f);
+        float refSum = 0.0f, hpSum = 0.0f;
+        for (int i = 2; i < 15; ++i) { refSum += ref[(size_t) i]; hpSum += hp[(size_t) i]; }
+        check (hpSum < refSum * 0.3f, "filtre passe-haut 3 kHz : attenuation du grave (" + juce::String (hpSum / refSum, 2) + ")");
+
+        setParam (*proc, "drive", 100.0f);
+        setParam (*proc, "clickAmount", 36.0f);
+        const auto wild = blockPeaks (*proc, 36, 30);
+        setParam (*proc, "drive", 0.0f);
+        setParam (*proc, "clickAmount", 0.0f);
+        check (std::all_of (wild.begin(), wild.end(), [] (float v) { return v >= 0.0f && v < 4.0f; }), "drive 100 % + pitch clic : audio propre et borne");
+
+        setParam (*proc, "reverse", 1.0f);
+        const auto rev = blockPeaks (*proc, 36, 30);
+        setParam (*proc, "reverse", 0.0f);
+        check (rev[0] < ref[0] * 0.6f && lastAudibleBlock (rev) > 5, "reverse : la slice commence par sa queue (douce)");
+        setParam (*proc, "keySource", 0.0f);
+    }
+
     // 11. Sauvegarde / rechargement (slices identiques)
     onMessageThread ([&] { sm.setManualCuts (1, { 0, 10000, 30000, 70000, 150000 }); });
     waitFor ([&] { return sm.getSlot (1).data->numSlices() == 5; });
@@ -384,10 +463,10 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "selectMode", 1.0f);
         setParam (*proc, "mapAxisX", 0.0f);
         setParam (*proc, "mapAxisY", 1.0f);
-        for (const char* tab : { "decoupe", "sequenceur", "carte" })
+        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix" })
         onMessageThread ([&]
         {
-            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : 0);
+            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : 0);
             std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
             ed->setSize (1280, 800);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
