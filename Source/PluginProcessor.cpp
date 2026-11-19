@@ -15,6 +15,7 @@ namespace
         const juce::Identifier mapPath      { "MapPath" };
         const juce::Identifier fxOrder      { "fxOrder" };
         const juce::Identifier random       { "Random" };
+        const juce::Identifier exportFolder { "exportFolder" };
     }
 
     constexpr int currentStateVersion = 4;
@@ -368,6 +369,14 @@ void IDGemsSlicerProcessor::fire (const Trigger& t) noexcept
     p.fxSend = t.fxSend >= 0.0f ? t.fxSend : fxSendParam->load() * 0.01f;
     engine.noteOn (data, p);
 
+    if (logTriggers && triggerLog.size() < triggerLog.capacity())   // pas d'allocation : capacite reservee
+    {
+        const auto& sl = data->slices[(size_t) p.slice];
+        int len = t.gateSamples > 0 ? t.gateSamples
+                                    : (int) ((sl.end - sl.start) * p.lengthFraction / juce::jmax (0.01, p.pitchRatio));
+        triggerLog.push_back ({ currentFireTime, t.slot, p.slice, t.velocity, juce::jmax (1, len) });
+    }
+
     lastTriggerSlot.store (t.slot);
     lastTriggerSlice.store (p.slice);
     triggerCounter.fetch_add (1);
@@ -626,6 +635,7 @@ void IDGemsSlicerProcessor::processSegment (juce::AudioBuffer<float>& buffer, in
         if (at > cursor) { engine.render (buffer, fxBus, cursor, at - cursor, liveParams); cursor = at; }
 
         const auto t = pending[(size_t) idx].trigger;
+        currentFireTime = sampleCounter + at;
         pending[(size_t) idx] = pending[(size_t) --numPending];
         fire (t);
     }
@@ -866,6 +876,9 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     outputGain.setTargetValue (juce::Decibels::decibelsToGain (outputGainDb->load()));
     outputGain.applyGain (buffer, numSamples);
 
+    // Resample interne : enregistre la sortie finale du plugin
+    recorder.process (buffer, numSamples, blockStartBeat, beatsPerSample, playing);
+
     for (int ch = 0; ch < 2; ++ch)
     {
         const float peak = ch < buffer.getNumChannels() ? buffer.getMagnitude (ch, 0, numSamples) : 0.0f;
@@ -905,6 +918,32 @@ void IDGemsSlicerProcessor::readFxParams() noexcept
     masterParams.mix = masterMixParam->load() * 0.01f;
     masterParams.limiterOn = limiterOnParam->load() > 0.5f;
     masterParams.ceilingDb = ceilingParam->load();
+}
+
+juce::File IDGemsSlicerProcessor::getExportFolder() const
+{
+    const auto path = apvts.state.getProperty (IDs::exportFolder).toString();
+    if (path.isNotEmpty() && juce::File::isAbsolutePath (path)) return juce::File (path);
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("IDGems Slicer");
+}
+
+void IDGemsSlicerProcessor::setExportFolder (const juce::File& f)
+{
+    apvts.state.setProperty (IDs::exportFolder, f.getFullPathName(), nullptr);
+}
+
+void IDGemsSlicerProcessor::prepareOfflineCopy (IDGemsSlicerProcessor& src)
+{
+    apvts.replaceState (src.apvts.copyState());
+    patternStore.setPattern (src.patternStore.get());
+    mapStore.setPath (src.mapStore.get());
+    setFxOrder (src.getFxOrder());
+    sampleManager.adoptFrom (src.sampleManager);
+    setOfflineBpm (src.getHostBpm());
+
+    // Pas de mutation / morph pendant un rendu
+    for (auto id : { "mutateOn", "morphOn" })
+        if (auto* p = apvts.getParameter (id)) p->setValueNotifyingHost (0.0f);
 }
 
 void IDGemsSlicerProcessor::setFxOrder (const std::array<int, idg::numFxModules>& o)

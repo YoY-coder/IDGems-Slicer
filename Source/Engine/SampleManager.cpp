@@ -343,6 +343,23 @@ void SampleManager::setManualCuts (int slot, std::vector<int> cuts)
     startJob (slot, {}, std::move (cuts), true);
 }
 
+void SampleManager::adoptFrom (const SampleManager& other)
+{
+    for (int i = 0; i < numSlots; ++i)
+    {
+        const auto info = other.getSlot (i);
+        {
+            const juce::ScopedLock sl (lock);
+            ++generations[(size_t) i];
+            slots[(size_t) i] = info;
+            slots[(size_t) i].loading = false;
+        }
+        publish (i, info.data);
+    }
+    rebuildSpreadTable();
+    sendChangeMessage();
+}
+
 SampleManager::SlotInfo SampleManager::getSlot (int slot) const
 {
     const juce::ScopedLock sl (lock);

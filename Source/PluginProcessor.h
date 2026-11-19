@@ -10,6 +10,7 @@
 #include "Engine/FxChain.h"
 #include "Engine/Master.h"
 #include "Engine/RandomManager.h"
+#include "Engine/Recorder.h"
 
 //==============================================================================
 // IDGems Slicer - moteur audio.
@@ -79,6 +80,21 @@ public:
     void setFxOrder (const std::array<int, idg::numFxModules>&);
     const idg::FxChain& getFxChain() const noexcept { return fxChain; }
     idg::RandomManager& getRandomManager() noexcept { return *randomManager; }
+
+    //== Resample / exports (etape 9) ==========================================
+    idg::Recorder& getRecorder() noexcept { return recorder; }
+    double getCurrentSampleRate() const noexcept { return currentSampleRate; }
+    juce::File getExportFolder() const;
+    void setExportFolder (const juce::File&);
+
+    // Copie de l'etat d'un autre processeur (rendu hors ligne), thread message
+    void prepareOfflineCopy (IDGemsSlicerProcessor& source);
+    void setOfflineBpm (double bpm) noexcept { hostBpm.store (bpm); }
+
+    // Journal des declenchements (rendu hors ligne -> export MIDI)
+    struct LoggedTrigger { juce::int64 time; int slot, slice; float velocity; int lengthSamples; };
+    void enableTriggerLog (int capacity) { triggerLog.clear(); triggerLog.reserve ((size_t) capacity); logTriggers = true; }
+    const std::vector<LoggedTrigger>& getTriggerLog() const noexcept { return triggerLog; }
 
     // Position effective du curseur sur la carte (pour l'affichage)
     std::atomic<float> cursorX { 0.5f }, cursorY { 0.5f };
@@ -162,6 +178,7 @@ private:
 
     double currentSampleRate = 44100.0;
     juce::int64 sampleCounter = 0;          // horloge absolue (debut du bloc courant)
+    juce::int64 currentFireTime = 0;
     double blockStartBeat = 0.0, beatsPerSample = 0.0, freeBeat = 0.0;
     bool hostPlaying = false;
 
@@ -203,6 +220,9 @@ private:
     idg::VoiceEngine::LiveParams liveParams;
 
     std::unique_ptr<idg::RandomManager> randomManager;
+    idg::Recorder recorder;
+    bool logTriggers = false;
+    std::vector<LoggedTrigger> triggerLog;
     std::atomic<float> *mutateOnParam = nullptr, *mutateBarsParam = nullptr;
     juce::int64 lastMutateBar = -1;
 

@@ -52,6 +52,9 @@ public:
     void rerollRandom (int slot);
     void setManualCuts (int slot, std::vector<int> cuts);
 
+    // Copie les samples deja charges d'un autre gestionnaire (rendu hors ligne)
+    void adoptFrom (const SampleManager& other);
+
     SlotInfo getSlot (int slot) const;
     const FeatureTable& getSpreadTable() const noexcept { return spreadEdit; }   // thread message
     bool isLoaded (int slot) const;

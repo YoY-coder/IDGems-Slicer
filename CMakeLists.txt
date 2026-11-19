@@ -44,6 +44,7 @@ target_sources(IDGemsSlicer
     PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/Exporter.cpp
         Source/UI/IDGemsLookAndFeel.cpp
         Source/UI/MainView.cpp
         Source/UI/WaveformView.cpp
@@ -55,6 +56,7 @@ target_sources(IDGemsSlicer
         Source/UI/VoiceView.cpp
         Source/UI/FxView.cpp
         Source/UI/RandomView.cpp
+        Source/UI/ExportView.cpp
         Source/Engine/Slicer.cpp
         Source/Engine/SampleManager.cpp
         Source/Engine/VoiceEngine.cpp

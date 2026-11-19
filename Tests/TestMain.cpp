@@ -4,6 +4,7 @@
 // =============================================================================
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Exporter.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <set>
 #include <algorithm>
@@ -657,6 +658,94 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "morphOn", 0.0f);
     }
 
+    // 13. Resample + exports (etape 9)
+    {
+        const auto exportDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("idgems_export_test");
+        exportDir.deleteRecursively();
+        onMessageThread ([&] { proc->setExportFolder (exportDir); });
+        setParam (*proc, "keySource", 1.0f);
+        setParam (*proc, "seqOn", 1.0f);
+        setParam (*proc, "seqRate", 2.0f);
+        onMessageThread ([&] { proc->getPatternStore().setEnabled (idg::laneProbability, false); });
+
+        auto& rec = proc->getRecorder();
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer on, none, off;
+        on.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 110), 0);
+        off.addEvent (juce::MidiMessage::noteOff (1, 36), 0);
+
+        // 1 mesure a 120 BPM / 48 kHz = 96000 samples exactement
+        onMessageThread ([&] { rec.arm (1, 48000.0, 120.0); });
+        proc->processBlock (buf, on);
+        for (int i = 0; i < 200 && rec.state.load() != idg::Recorder::finished; ++i) proc->processBlock (buf, none);
+        juce::AudioBuffer<float> recorded;
+        const bool got = onMessageThread ([&] { return rec.takeRecording (recorded); });
+        check (got && recorded.getNumSamples() == 96000 && recorded.getMagnitude (0, 0, 96000) > 0.01f,
+               "resample 1 mesure : " + juce::String (recorded.getNumSamples()) + " samples (96000 attendus), avec du son");
+
+        // Jusqu'a l'arret
+        onMessageThread ([&] { rec.arm (0, 48000.0, 120.0); });
+        for (int i = 0; i < 20; ++i) proc->processBlock (buf, none);
+        rec.requestStop();
+        proc->processBlock (buf, none);
+        juce::AudioBuffer<float> recorded2;
+        onMessageThread ([&] { rec.takeRecording (recorded2); });
+        check (recorded2.getNumSamples() >= 20 * 512 && recorded2.getNumSamples() <= 21 * 512, "resample jusqu'a l'arret");
+        proc->processBlock (buf, off);
+        for (int i = 0; i < 20; ++i) proc->processBlock (buf, none);
+
+        // Ecriture du fichier puis rechargement dans le sample 4 (re-decoupe auto)
+        juce::File recFile;
+        std::atomic<bool> saved { false };
+        onMessageThread ([&] { Exporter::saveRecording (recorded, 48000.0, exportDir, [&] (juce::Array<juce::File> f, juce::String)
+                                                         { if (! f.isEmpty()) recFile = f[0]; saved = true; }); });
+        waitFor ([&] { return saved.load(); });
+        check (recFile.existsAsFile() && recFile.getParentDirectory().getFileName() == "Resamples", "resample ecrit dans le dossier choisi");
+        onMessageThread ([&] { sm.loadFile (3, recFile); });
+        waitFor ([&] { return sm.isLoaded (3) && ! sm.getSlot (3).loading; });
+        const int recSlices = onMessageThread ([&] { return sm.isLoaded (3) ? sm.getSlot (3).data->numSlices() : 0; });
+        check (recSlices >= 4, "resample recharge dans le sample 4 et re-decoupe (" + juce::String (recSlices) + " slices)");
+
+        // Export du pattern : WAV + MIDI sur 2 mesures
+        juce::Array<juce::File> exported;
+        std::atomic<bool> done { false };
+        onMessageThread ([&] { Exporter::renderPattern (*proc, 2, true, true, [&] (juce::Array<juce::File> f, juce::String) { exported = f; done = true; }); });
+        waitFor ([&] { return done.load(); }, 30000);
+        juce::File wavFile, midFile;
+        for (auto& f : exported) { if (f.hasFileExtension ("wav")) wavFile = f; if (f.hasFileExtension ("mid")) midFile = f; }
+        int wavLen = 0;
+        {
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (wavFile) }) wavLen = (int) r->lengthInSamples;
+        }
+        const double expected = 2 * 4 * 60.0 / proc->getHostBpm() * proc->getCurrentSampleRate();
+        check (wavFile.existsAsFile() && std::abs (wavLen - expected) < 2, "export WAV du pattern : 2 mesures (" + juce::String (wavLen) + " samples)");
+        int notes = 0;
+        {
+            juce::MidiFile mf;
+            juce::FileInputStream fis (midFile);
+            if (fis.openedOk() && mf.readFrom (fis))
+                for (int t = 0; t < mf.getNumTracks(); ++t)
+                    for (auto* ev : *mf.getTrack (t)) if (ev->message.isNoteOn()) ++notes;
+        }
+        check (midFile.existsAsFile() && notes >= 16, "export MIDI du pattern : " + juce::String (notes) + " notes (16 pas de 1/16 ou plus)");
+
+        // One-shots
+        done = false;
+        exported.clear();
+        onMessageThread ([&] { Exporter::exportSlices (*proc, [&] (juce::Array<juce::File> f, juce::String) { exported = f; done = true; }); });
+        waitFor ([&] { return done.load(); }, 30000);
+        int expectedSlices = 0, wavs = 0;
+        for (int sl = 0; sl < idg::numSlots; ++sl)
+            expectedSlices += onMessageThread ([&] { return sm.isLoaded (sl) ? sm.getSlot (sl).data->numSlices() : 0; });
+        for (auto& d : exported) wavs += d.getNumberOfChildFiles (juce::File::findFiles, "*.wav");
+        check (wavs == expectedSlices && wavs > 0, "export one-shots : " + juce::String (wavs) + " fichiers / " + juce::String (expectedSlices) + " slices");
+
+        setParam (*proc, "seqOn", 0.0f);
+        setParam (*proc, "keySource", 0.0f);
+    }
+
     // 9. Capture de l'interface
     if (snapshotPath.isNotEmpty())
     {
@@ -667,10 +756,10 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "selectMode", 1.0f);
         setParam (*proc, "mapAxisX", 0.0f);
         setParam (*proc, "mapAxisY", 1.0f);
-        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix", "fx", "random" })
+        for (const char* tab : { "decoupe", "sequenceur", "carte", "voix", "fx", "random", "export" })
         onMessageThread ([&]
         {
-            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : juce::String (tab) == "fx" ? 4 : juce::String (tab) == "random" ? 5 : 0);
+            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : juce::String (tab) == "voix" ? 3 : juce::String (tab) == "fx" ? 4 : juce::String (tab) == "random" ? 5 : juce::String (tab) == "export" ? 6 : 0);
             std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
             ed->setSize (1280, 800);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
