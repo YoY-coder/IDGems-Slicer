@@ -4,7 +4,7 @@
 #include "../PluginProcessor.h"
 
 MainView::MainView (IDGemsSlicerProcessor& p)
-    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), voiceView (p), fxView (p), randomView (p), exportView (p), playPanel (p)
+    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), voiceView (p), fxView (p), randomView (p), exportView (p), headerBar (p), playPanel (p)
 {
     for (int i = 0; i < 4; ++i)
     {
@@ -20,6 +20,8 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     addChildComponent (randomView);
     addChildComponent (exportView);
     addAndMakeVisible (playPanel);
+    addAndMakeVisible (headerBar);
+    headerBar.onPresetLoaded = [this] { sequencerView.refresh(); };
 
     int tabIndex = 0;
     for (auto* b : { &cutTab, &seqTab, &mapTab, &voiceTab, &fxTab, &randomTab, &exportTab })
@@ -191,6 +193,8 @@ void MainView::resized()
     outputGain.setBounds (knob);
     h.removeFromRight (16);
     midiLedArea = h.removeFromRight (70);
+    h.removeFromRight (12);
+    headerBar.setBounds (h.removeFromRight (440));
 }
 
 //==============================================================================
@@ -208,6 +212,7 @@ void MainView::paint (juce::Graphics& g)
     }
 
     drawGlitchTitle (g, headerArea.toFloat().withWidth (520.0f));
+    drawGutterGlitch (g);
 
     // LED MIDI
     {
@@ -353,6 +358,50 @@ void MainView::drawGlitchTitle (juce::Graphics& g, juce::Rectangle<float> area)
                 juce::Justification::centredLeft);
 }
 
+// "Fractures" qui reagissent au son, uniquement dans les interstices entre panneaux
+// (jamais sur les valeurs)
+juce::RectangleList<int> MainView::gutters() const
+{
+    juce::RectangleList<int> list;
+    list.add (getLocalBounds().withTop (slotsArea.getBottom()).withHeight (mapArea.getY() - slotsArea.getBottom()));
+    list.add (getLocalBounds().withTop (headerArea.getBottom()).withHeight (slotsArea.getY() - headerArea.getBottom()));
+    list.add ({ mapArea.getRight(), mapArea.getY(), fxArea.getX() - mapArea.getRight(), mapArea.getHeight() });
+    list.add ({ 0, headerArea.getBottom(), slotsArea.getX(), getHeight() - headerArea.getBottom() });
+    list.add ({ fxArea.getRight(), headerArea.getBottom(), getWidth() - fxArea.getRight(), getHeight() - headerArea.getBottom() });
+    return list;
+}
+
+void MainView::drawGutterGlitch (juce::Graphics& g)
+{
+    if (gutterGlitch < 0.02f) return;
+    juce::Random r (glitchSeed);
+    for (auto& gut : gutters())
+    {
+        const bool horizontal = gut.getWidth() > gut.getHeight();
+        const int bars = 1 + (int) (gutterGlitch * 5.0f);
+        for (int i = 0; i < bars; ++i)
+        {
+            const float alpha = 0.25f + 0.6f * gutterGlitch * r.nextFloat();
+            juce::Rectangle<float> bar;
+            if (horizontal)
+            {
+                const float w = 40.0f + r.nextFloat() * 260.0f * gutterGlitch;
+                bar = { gut.getX() + r.nextFloat() * (gut.getWidth() - w), gut.getY() + r.nextFloat() * (gut.getHeight() - 2.0f), w, 1.0f + r.nextFloat() * 2.0f };
+            }
+            else
+            {
+                const float h = 30.0f + r.nextFloat() * 200.0f * gutterGlitch;
+                bar = { gut.getX() + r.nextFloat() * (gut.getWidth() - 2.0f), gut.getY() + r.nextFloat() * (gut.getHeight() - h), 1.0f + r.nextFloat() * 2.0f, h };
+            }
+            // aberration chromatique : copie bleue decalee + orange
+            g.setColour (Theme::blue.withAlpha (alpha * 0.7f));
+            g.fillRect (bar.translated (-2.0f, 1.0f));
+            g.setColour (Theme::orange.withAlpha (alpha));
+            g.fillRect (bar);
+        }
+    }
+}
+
 void MainView::drawMeter (juce::Graphics& g, juce::Rectangle<float> area)
 {
     g.setColour (Theme::panel);
@@ -403,6 +452,13 @@ void MainView::timerCallback()
 
     repaint (headerArea);
 
+    // Fractures des interstices : suivent le niveau de sortie
+    const float lvl = juce::jlimit (0.0f, 1.0f, juce::jmax (l, r) * 1.2f);
+    const bool wasGlitching = gutterGlitch > 0.02f;
+    gutterGlitch = juce::jmax (lvl, gutterGlitch * 0.75f);
+    if (gutterGlitch > 0.02f || wasGlitching)
+        for (auto& gut : gutters()) repaint (gut);
+
     // Panneaux
     std::array<bool, 4> loaded {};
     for (int i = 0; i < 4; ++i) loaded[(size_t) i] = processor.getSampleManager().isLoaded (i);
@@ -414,5 +470,7 @@ void MainView::timerCallback()
     if (fxView.isVisible()) fxView.tick();
     if (randomView.isVisible()) randomView.tick();
     exportView.tick();   // toujours : l'enregistrement peut se terminer onglet ferme
+    headerBar.tick();
+    if (sequencerView.isVisible()) sequencerView.refreshIfPatternChanged();
     playPanel.tick (probs, loaded);
 }

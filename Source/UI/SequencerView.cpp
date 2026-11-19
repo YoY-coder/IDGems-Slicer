@@ -2,6 +2,7 @@
 #include "Theme.h"
 #include "IDGemsLookAndFeel.h"
 #include "../PluginProcessor.h"
+#include <cstring>
 
 namespace
 {
@@ -355,6 +356,27 @@ void SequencerView::refresh()
         row.length.setValue (pat.lanes[(size_t) i].length, juce::dontSendNotification);
     }
     grid->repaint();
+}
+
+void SequencerView::refreshIfPatternChanged()
+{
+    // La banque peut changer au MIDI ou par undo : on resynchronise les longueurs / on-off
+    const int cur = processor.getPatternStore().getCurrentIndex();
+    const auto& pat = processor.getPatternStore().get();
+    bool differs = cur != shownPattern;
+    for (int i = 0; i < idg::numLanes && ! differs; ++i)
+        differs = laneRows[(size_t) i]->enabled.getToggleState() != pat.lanes[(size_t) i].enabled
+               || (int) laneRows[(size_t) i]->length.getValue() != pat.lanes[(size_t) i].length;
+    if (differs)
+    {
+        shownPattern = cur;
+        refresh();
+    }
+    else if (std::memcmp (&shownCopy, &pat, sizeof (idg::Pattern)) != 0)
+    {
+        grid->repaint();   // valeurs changees (mutate, morph, undo...)
+    }
+    shownCopy = pat;
 }
 
 void SequencerView::tick()

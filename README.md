@@ -3,7 +3,7 @@
 Plugin instrument VST3 (MIDI → audio) de la famille IDGems : découpe de gros bounces de sound design
 en slices, jouées et séquencées au MIDI avec beaucoup de random.
 
-**État actuel : étapes 1 à 9 / 10**
+**État actuel : version 1.0 — les 10 étapes sont terminées**
 - 4 emplacements de samples (glisser-déposer ou bouton CHARGER), chacun avec sa couleur.
 - Découpe : transitoires (sensibilité), grille calée sur le tempo (1/4 à 1/64), parts égales,
   aléatoire (bouton RE-SLICE RANDOM), manuel (marqueurs à la souris). 16 à 256 slices.
@@ -41,7 +41,13 @@ en slices, jouées et séquencées au MIDI avec beaucoup de random.
 - Exports : pattern en WAV (N mesures, rendu hors temps réel), pattern en MIDI (slices jouées,
   à rejouer en Mode Clavier), slices en one-shots (un fichier par slice). Les fichiers se
   glissent directement dans Ableton.
-- Tout est sauvegardé avec le projet Ableton (chemins des fichiers, slices exactes, pattern, trajet,
+- Presets (en-tête) : SAUVER / précédent / suivant / liste, option « + SAMPLES » pour embarquer
+  les fichiers audio dans le preset (partage, autre ordinateur). Dossier : <dossier d'export>/Presets.
+- Banque de 8 patterns par preset : boutons PATTERN 1-8, ou au MIDI notes C-2 à G-2 (0 à 7) /
+  Program Change 1 à 8. Clic droit sur un numéro : copier le pattern courant / vider.
+- UNDO / REDO de toutes les modifications (réglages, lanes, marqueurs, trajet, samples).
+- Bulles d'aide sur chaque contrôle ; éléments graphiques qui réagissent au son.
+- Tout est sauvegardé avec le projet Ableton (chemins des fichiers, slices exactes, 8 patterns, trajet,
   ordre des FX, cadenas et plages du random, snapshots du morph, dossier d'export, réglages).
 
 ## Compilation automatique (sans rien installer)
@@ -119,5 +125,8 @@ S'il y a `=== ECHEC ===`, copiez tout le texte de la fenêtre et envoyez-le-moi.
 | `Source/Engine/Recorder.h` | Resample interne |
 | `Source/Exporter.*` | Exports WAV / MIDI / one-shots |
 | `Source/UI/ExportView.*` | Onglet EXPORT |
+| `Source/PresetManager.*` | Presets (.idgslicer) |
+| `Source/Engine/UndoHistory.*` | Undo / redo |
+| `Source/UI/HeaderBar.*` | Presets, banque de patterns, undo / redo |
 | `Tests/TestMain.cpp` | Tests automatiques du moteur |
 | `Resources/Fonts/` | Votre police (.ttf / .otf) pour les titres, embarquée dans le plugin |

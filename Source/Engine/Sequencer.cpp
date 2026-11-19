@@ -108,12 +108,25 @@ void PatternStore::publish()
 {
     {
         const juce::SpinLock::ScopedLockType sl (lock);
-        shared = edit;
+        shared = bank;
     }
     version.fetch_add (1);
 }
 
-void PatternStore::pull (Pattern& dest, int& lastVersion) noexcept
+void PatternStore::setBank (const PatternBank& b)
+{
+    bank = b;
+    publish();
+}
+
+void PatternStore::copyPattern (int from, int to)
+{
+    if (! juce::isPositiveAndBelow (from, numPatterns) || ! juce::isPositiveAndBelow (to, numPatterns)) return;
+    bank[(size_t) to] = bank[(size_t) from];
+    publish();
+}
+
+void PatternStore::pull (PatternBank& dest, int& lastVersion) noexcept
 {
     const int v = version.load();
     if (v == lastVersion) return;
@@ -131,28 +144,28 @@ void PatternStore::setValue (int lane, int step, float value)
     const auto& info = laneInfo (lane);
     value = juce::jlimit (info.minValue, info.maxValue, value);
     if (info.discrete) value = (float) juce::roundToInt (value);
-    edit.lanes[(size_t) lane].values[(size_t) step] = value;
+    cur().lanes[(size_t) lane].values[(size_t) step] = value;
     publish();
 }
 
 void PatternStore::setLength (int lane, int length)
 {
     if (! juce::isPositiveAndBelow (lane, numLanes)) return;
-    edit.lanes[(size_t) lane].length = juce::jlimit (1, maxSteps, length);
+    cur().lanes[(size_t) lane].length = juce::jlimit (1, maxSteps, length);
     publish();
 }
 
 void PatternStore::setEnabled (int lane, bool e)
 {
     if (! juce::isPositiveAndBelow (lane, numLanes)) return;
-    edit.lanes[(size_t) lane].enabled = e;
+    cur().lanes[(size_t) lane].enabled = e;
     publish();
 }
 
 void PatternStore::resetLane (int lane)
 {
     if (! juce::isPositiveAndBelow (lane, numLanes)) return;
-    edit.lanes[(size_t) lane].values.fill (laneInfo (lane).defaultValue);
+    cur().lanes[(size_t) lane].values.fill (laneInfo (lane).defaultValue);
     publish();
 }
 
@@ -181,7 +194,7 @@ float PatternStore::randomValue (int lane, juce::Random& r)
 void PatternStore::randomiseLane (int lane, juce::Random& r)
 {
     if (! juce::isPositiveAndBelow (lane, numLanes)) return;
-    auto& l = edit.lanes[(size_t) lane];
+    auto& l = cur().lanes[(size_t) lane];
     for (auto& v : l.values) v = randomValue (lane, r);
     l.enabled = true;
     publish();
@@ -190,7 +203,7 @@ void PatternStore::randomiseLane (int lane, juce::Random& r)
 void PatternStore::mutateLane (int lane, juce::Random& r, float amount)
 {
     if (! juce::isPositiveAndBelow (lane, numLanes) || amount <= 0.0f) return;
-    auto& l = edit.lanes[(size_t) lane];
+    auto& l = cur().lanes[(size_t) lane];
     for (auto& v : l.values)
         if (r.nextFloat() < amount) v = randomValue (lane, r);
     publish();
@@ -201,56 +214,94 @@ void PatternStore::randomiseAll (juce::Random& r)
     for (int i = 0; i < numLanes; ++i)
         if (i != laneFreeze && i != laneFxSend)
         {
-            const bool wasEnabled = edit.lanes[(size_t) i].enabled;
+            const bool wasEnabled = cur().lanes[(size_t) i].enabled;
             randomiseLane (i, r);
-            edit.lanes[(size_t) i].enabled = wasEnabled;
+            cur().lanes[(size_t) i].enabled = wasEnabled;
         }
     publish();
 }
 
 void PatternStore::setPattern (const Pattern& p)
 {
-    edit = p;
+    cur() = p;
     publish();
+}
+
+namespace
+{
+    juce::ValueTree patternToTree (const Pattern& pat, const juce::Identifier& type)
+    {
+        juce::ValueTree t (type);
+        for (int i = 0; i < numLanes; ++i)
+        {
+            const auto& l = pat.lanes[(size_t) i];
+            juce::ValueTree lt (IDs::lane);
+            lt.setProperty (IDs::index, i, nullptr);
+            lt.setProperty (IDs::enabled, l.enabled, nullptr);
+            lt.setProperty (IDs::length, l.length, nullptr);
+            juce::StringArray vals;
+            for (auto v : l.values) vals.add (juce::String (v, 4));
+            lt.setProperty (IDs::values, vals.joinIntoString (","), nullptr);
+            t.appendChild (lt, nullptr);
+        }
+        return t;
+    }
+
+    Pattern patternFromTree (const juce::ValueTree& t)
+    {
+        Pattern p;
+        for (int i = 0; i < numLanes; ++i)
+        {
+            auto lt = t.getChildWithProperty (IDs::index, i);
+            if (! lt.isValid()) continue;
+            auto& l = p.lanes[(size_t) i];
+            l.enabled = (bool) lt.getProperty (IDs::enabled, l.enabled);
+            l.length = juce::jlimit (1, maxSteps, (int) lt.getProperty (IDs::length, 16));
+            const auto vals = juce::StringArray::fromTokens (lt.getProperty (IDs::values).toString(), ",", "");
+            for (int s = 0; s < juce::jmin (maxSteps, vals.size()); ++s)
+                l.values[(size_t) s] = juce::jlimit (laneInfo (i).minValue, laneInfo (i).maxValue, vals[s].getFloatValue());
+        }
+        return p;
+    }
+
+    const juce::Identifier patternId { "Pattern" };
+    const juce::Identifier currentId { "current" };
 }
 
 juce::ValueTree PatternStore::toValueTree() const
 {
-    juce::ValueTree t (IDs::sequencer);
-    Pattern copy;   // copie coherente (peut etre appele hors du thread message)
+    PatternBank copy;   // copie coherente (peut etre appele hors du thread message)
     {
         const juce::SpinLock::ScopedLockType sl (lock);
         copy = shared;
     }
-    for (int i = 0; i < numLanes; ++i)
+    const int cur = current.load();
+    // Le pattern courant est aussi ecrit "a plat" (compatibilite avec les versions precedentes)
+    auto t = patternToTree (copy[(size_t) cur], IDs::sequencer);
+    t.setProperty (currentId, cur, nullptr);
+    for (int i = 0; i < numPatterns; ++i)
     {
-        const auto& l = copy.lanes[(size_t) i];
-        juce::ValueTree lt (IDs::lane);
-        lt.setProperty (IDs::index, i, nullptr);
-        lt.setProperty (IDs::enabled, l.enabled, nullptr);
-        lt.setProperty (IDs::length, l.length, nullptr);
-        juce::StringArray vals;
-        for (auto v : l.values) vals.add (juce::String (v, 4));
-        lt.setProperty (IDs::values, vals.joinIntoString (","), nullptr);
-        t.appendChild (lt, nullptr);
+        auto pt = patternToTree (copy[(size_t) i], patternId);
+        pt.setProperty (IDs::index, i, nullptr);
+        t.appendChild (pt, nullptr);
     }
     return t;
 }
 
 void PatternStore::fromValueTree (const juce::ValueTree& t)
 {
-    Pattern p;
-    for (int i = 0; i < numLanes; ++i)
+    PatternBank b;
+    bool anyBank = false;
+    for (int i = 0; i < numPatterns; ++i)
     {
-        auto lt = t.getChildWithProperty (IDs::index, i);
-        if (! lt.isValid()) continue;
-        auto& l = p.lanes[(size_t) i];
-        l.enabled = (bool) lt.getProperty (IDs::enabled, l.enabled);
-        l.length = juce::jlimit (1, maxSteps, (int) lt.getProperty (IDs::length, 16));
-        const auto vals = juce::StringArray::fromTokens (lt.getProperty (IDs::values).toString(), ",", "");
-        for (int s = 0; s < juce::jmin (maxSteps, vals.size()); ++s)
-            l.values[(size_t) s] = juce::jlimit (laneInfo (i).minValue, laneInfo (i).maxValue, vals[s].getFloatValue());
+        juce::ValueTree pt;
+        for (auto c : t)
+            if (c.hasType (patternId) && (int) c.getProperty (IDs::index) == i) pt = c;
+        if (pt.isValid()) { b[(size_t) i] = patternFromTree (pt); anyBank = true; }
     }
-    setPattern (p);
+    if (! anyBank)
+        b[0] = patternFromTree (t);   // ancien format : un seul pattern
+    current.store (juce::jlimit (0, numPatterns - 1, (int) t.getProperty (currentId, 0)));
+    setBank (b);
 }
 }

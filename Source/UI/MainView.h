@@ -11,6 +11,7 @@
 #include "FxView.h"
 #include "RandomView.h"
 #include "ExportView.h"
+#include "HeaderBar.h"
 
 class IDGemsSlicerProcessor;
 
@@ -40,6 +41,9 @@ private:
                           const juce::String& title, const juce::String& note,
                           juce::Colour accent);
     void drawMeter (juce::Graphics&, juce::Rectangle<float> area);
+    void drawGutterGlitch (juce::Graphics&);
+    juce::RectangleList<int> gutters() const;
+    float gutterGlitch = 0.0f;
     void buildTexture();
 
     IDGemsSlicerProcessor& processor;
@@ -58,6 +62,7 @@ private:
     FxView fxView;
     RandomView randomView;
     ExportView exportView;
+    HeaderBar headerBar;
     PlayPanel playPanel;
     juce::TextButton cutTab { "DECOUPE" }, seqTab { "SEQUENCEUR" }, mapTab { "CARTE" }, voiceTab { "VOIX" }, fxTab { "FX" }, randomTab { "RANDOM" }, exportTab { "EXPORT" };
     int currentTab = 0;

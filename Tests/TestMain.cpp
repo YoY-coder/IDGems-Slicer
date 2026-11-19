@@ -5,6 +5,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Exporter.h"
+#include "PresetManager.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <set>
 #include <algorithm>
@@ -701,10 +702,17 @@ void runTests (const juce::String& snapshotPath)
                                                          { if (! f.isEmpty()) recFile = f[0]; saved = true; }); });
         waitFor ([&] { return saved.load(); });
         check (recFile.existsAsFile() && recFile.getParentDirectory().getFileName() == "Resamples", "resample ecrit dans le dossier choisi");
-        onMessageThread ([&] { sm.loadFile (3, recFile); });
+        onMessageThread ([&]
+        {
+            idg::SliceSettings st;
+            st.mode = idg::SliceMode::equalParts;
+            st.count = 16;
+            sm.setSettings (3, st);   // decoupe connue pour un test deterministe
+            sm.loadFile (3, recFile);
+        });
         waitFor ([&] { return sm.isLoaded (3) && ! sm.getSlot (3).loading; });
         const int recSlices = onMessageThread ([&] { return sm.isLoaded (3) ? sm.getSlot (3).data->numSlices() : 0; });
-        check (recSlices >= 4, "resample recharge dans le sample 4 et re-decoupe (" + juce::String (recSlices) + " slices)");
+        check (recSlices == 16, "resample recharge dans le sample 4 et re-decoupe (" + juce::String (recSlices) + " slices)");
 
         // Export du pattern : WAV + MIDI sur 2 mesures
         juce::Array<juce::File> exported;
@@ -744,6 +752,62 @@ void runTests (const juce::String& snapshotPath)
 
         setParam (*proc, "seqOn", 0.0f);
         setParam (*proc, "keySource", 0.0f);
+    }
+
+    // 14. Banque de patterns, presets, undo (etape 10)
+    {
+        auto& ps = proc->getPatternStore();
+        juce::AudioBuffer<float> buf (2, 512);
+        onMessageThread ([&] { ps.selectPattern (0); ps.setValue (idg::laneSample, 0, 3.0f); });
+        juce::MidiBuffer m1;
+        m1.addEvent (juce::MidiMessage::noteOn (1, 1, (juce::uint8) 100), 0);   // C#-2 : pattern 2
+        proc->processBlock (buf, m1);
+        const bool switched = ps.getCurrentIndex() == 1
+                           && onMessageThread ([&] { return juce::approximatelyEqual (ps.get().lanes[idg::laneSample].values[0], 0.0f); });
+        juce::MidiBuffer pc;
+        pc.addEvent (juce::MidiMessage::programChange (1, 0), 0);
+        proc->processBlock (buf, pc);
+        check (switched && ps.getCurrentIndex() == 0
+               && onMessageThread ([&] { return juce::approximatelyEqual (ps.get().lanes[idg::laneSample].values[0], 3.0f); }),
+               "banque : note MIDI 1 = pattern 2, Program Change 1 = pattern 1 (chacun garde ses pas)");
+
+        // Preset avec samples embarques
+        const auto presetFile = proc->getExportFolder().getChildFile ("Presets").getChildFile ("Test Preset.idgslicer");
+        juce::String err;
+        setParam (*proc, "cutoff", 1234.0f);
+        const bool saved = onMessageThread ([&] { return PresetManager::save (*proc, presetFile, true, err); });
+        check (saved && presetFile.existsAsFile(), "preset sauvegarde (" + juce::String (presetFile.getSize() / 1024) + " Ko avec samples)");
+
+        setParam (*proc, "cutoff", 300.0f);
+        onMessageThread ([&] { sm.clearSlot (0); ps.setValue (idg::laneSample, 0, 1.0f); });
+        const bool loaded = onMessageThread ([&] { return PresetManager::load (*proc, presetFile, err); });
+        waitFor ([&] { return sm.isLoaded (0) && ! sm.getSlot (0).loading; });
+        const auto slot0 = onMessageThread ([&] { return sm.getSlot (0).file; });
+        check (loaded && std::abs (proc->getAPVTS().getRawParameterValue ("cutoff")->load() - 1234.0f) < 1.0f,
+               "preset recharge : reglages restaures");
+        check (sm.isLoaded (0) && slot0.getFullPathName().contains ("Presets") && slot0.getFullPathName().contains ("Samples"),
+               "preset : sample embarque re-extrait et recharge (" + slot0.getFileName() + ")");
+        check (onMessageThread ([&] { return juce::approximatelyEqual (ps.get().lanes[idg::laneSample].values[0], 3.0f); }),
+               "preset : banque de patterns restauree");
+        check (onMessageThread ([&] { return proc->getPresetName() == "Test Preset"; }), "preset : nom affiche");
+
+        // Undo / redo
+        juce::Thread::sleep (800);
+        const float before = proc->getAPVTS().getRawParameterValue ("decay")->load();
+        setParam (*proc, "decay", 1500.0f);
+        juce::Thread::sleep (800);   // l'etat se stabilise -> une etape d'undo
+        onMessageThread ([&] { proc->getUndoHistory().undo(); });
+        const float undone = proc->getAPVTS().getRawParameterValue ("decay")->load();
+        onMessageThread ([&] { proc->getUndoHistory().redo(); });
+        const float redone = proc->getAPVTS().getRawParameterValue ("decay")->load();
+        check (std::abs (undone - before) < 0.5f && std::abs (redone - 1500.0f) < 0.5f,
+               "undo / redo : " + juce::String (before, 0) + " > 1500 > undo " + juce::String (undone, 0) + " > redo " + juce::String (redone, 0));
+
+        onMessageThread ([&] { ps.setValue (idg::laneGate, 3, 0.9f); });
+        juce::Thread::sleep (800);
+        onMessageThread ([&] { proc->getUndoHistory().undo(); });
+        check (onMessageThread ([&] { return ! juce::approximatelyEqual (ps.get().lanes[idg::laneGate].values[3], 0.9f); }),
+               "undo : annule aussi une modification de lane");
     }
 
     // 9. Capture de l'interface

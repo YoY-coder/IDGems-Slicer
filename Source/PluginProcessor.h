@@ -11,6 +11,7 @@
 #include "Engine/Master.h"
 #include "Engine/RandomManager.h"
 #include "Engine/Recorder.h"
+#include "Engine/UndoHistory.h"
 
 //==============================================================================
 // IDGems Slicer - moteur audio.
@@ -80,6 +81,13 @@ public:
     void setFxOrder (const std::array<int, idg::numFxModules>&);
     const idg::FxChain& getFxChain() const noexcept { return fxChain; }
     idg::RandomManager& getRandomManager() noexcept { return *randomManager; }
+
+    //== Presets / undo (etape 10) =============================================
+    juce::ValueTree createStateTree();
+    void applyStateTree (juce::ValueTree tree, bool keepEditorState);
+    idg::UndoHistory& getUndoHistory() noexcept { return *undoHistory; }
+    juce::String getPresetName() const;
+    void setPresetName (const juce::String&);
 
     //== Resample / exports (etape 9) ==========================================
     idg::Recorder& getRecorder() noexcept { return recorder; }
@@ -173,8 +181,9 @@ private:
     idg::Router router;
     std::array<idg::SampleData::Ptr, idg::numSlots> audioSlots;   // cache du thread audio
 
-    idg::Pattern pattern;          // copie audio du sequenceur
-    int patternVersion = 0;
+    idg::PatternBank patternBank;  // copie audio de la banque de patterns
+    idg::Pattern pattern;          // pattern courant (copie audio)
+    int patternVersion = 0, patternIndexUsed = -1;
 
     double currentSampleRate = 44100.0;
     juce::int64 sampleCounter = 0;          // horloge absolue (debut du bloc courant)
@@ -221,6 +230,7 @@ private:
 
     std::unique_ptr<idg::RandomManager> randomManager;
     idg::Recorder recorder;
+    std::unique_ptr<idg::UndoHistory> undoHistory;
     bool logTriggers = false;
     std::vector<LoggedTrigger> triggerLog;
     std::atomic<float> *mutateOnParam = nullptr, *mutateBarsParam = nullptr;

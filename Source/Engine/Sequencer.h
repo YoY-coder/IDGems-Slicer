@@ -13,6 +13,7 @@ namespace idg
 // le thread audio sans allocation ni blocage.
 //==============================================================================
 constexpr int maxSteps = 64;
+constexpr int numPatterns = 8;   // banque de patterns par preset
 
 enum LaneId
 {
@@ -58,13 +59,22 @@ float grooveTiming (int groove, juce::int64 step);
 float grooveVelocity (int groove, juce::int64 step);
 
 //==============================================================================
+using PatternBank = std::array<Pattern, numPatterns>;
+
 class PatternStore
 {
 public:
     PatternStore() = default;
 
+    // Pattern courant de la banque (change par l'interface ou au MIDI)
+    int getCurrentIndex() const noexcept { return current.load(); }
+    void selectPattern (int index) noexcept { current.store (juce::jlimit (0, numPatterns - 1, index)); }
+    const PatternBank& getBank() const noexcept { return bank; }
+    void setBank (const PatternBank&);
+    void copyPattern (int from, int to);
+
     // Thread message
-    const Pattern& get() const noexcept { return edit; }
+    const Pattern& get() const noexcept { return bank[(size_t) current.load()]; }
     void setValue (int lane, int step, float value);
     void setLength (int lane, int length);
     void setEnabled (int lane, bool enabled);
@@ -79,14 +89,16 @@ public:
     juce::ValueTree toValueTree() const;
     void fromValueTree (const juce::ValueTree&);
 
-    // Thread audio : copie la derniere version si elle a change
-    void pull (Pattern& dest, int& lastVersion) noexcept;
+    // Thread audio : copie la derniere version de la banque si elle a change
+    void pull (PatternBank& dest, int& lastVersion) noexcept;
 
 private:
     void publish();
+    Pattern& cur() noexcept { return bank[(size_t) current.load()]; }
 
-    Pattern edit;
-    Pattern shared;
+    PatternBank bank;
+    PatternBank shared;
+    std::atomic<int> current { 0 };
     mutable juce::SpinLock lock;
     std::atomic<int> version { 1 };
 };

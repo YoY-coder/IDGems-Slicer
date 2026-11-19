@@ -4,7 +4,7 @@
 # =============================================================================
 cmake_minimum_required(VERSION 3.22)
 
-project(IDGemsSlicer VERSION 0.1.0 LANGUAGES C CXX)
+project(IDGemsSlicer VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,6 +45,7 @@ target_sources(IDGemsSlicer
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/Exporter.cpp
+        Source/PresetManager.cpp
         Source/UI/IDGemsLookAndFeel.cpp
         Source/UI/MainView.cpp
         Source/UI/WaveformView.cpp
@@ -57,6 +58,7 @@ target_sources(IDGemsSlicer
         Source/UI/FxView.cpp
         Source/UI/RandomView.cpp
         Source/UI/ExportView.cpp
+        Source/UI/HeaderBar.cpp
         Source/Engine/Slicer.cpp
         Source/Engine/SampleManager.cpp
         Source/Engine/VoiceEngine.cpp
@@ -65,7 +67,8 @@ target_sources(IDGemsSlicer
         Source/Engine/MapStore.cpp
         Source/Engine/FxChain.cpp
         Source/Engine/Master.cpp
-        Source/Engine/RandomManager.cpp)
+        Source/Engine/RandomManager.cpp
+        Source/Engine/UndoHistory.cpp)
 
 target_include_directories(IDGemsSlicer PRIVATE Source)
 

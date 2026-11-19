@@ -17,6 +17,7 @@ public:
     ~SequencerView() override;
 
     void refresh();     // relit le pattern (apres chargement d'un projet)
+    void refreshIfPatternChanged();
     void tick();        // ~30 fois / s
 
     void paint (juce::Graphics&) override;
@@ -47,5 +48,7 @@ private:
 
     juce::Random random;
     juce::int64 lastHeaderStep = -2;
+    int shownPattern = -1;
+    idg::Pattern shownCopy;
     juce::Rectangle<int> namesArea;
 };

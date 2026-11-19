@@ -16,6 +16,7 @@ namespace
         const juce::Identifier fxOrder      { "fxOrder" };
         const juce::Identifier random       { "Random" };
         const juce::Identifier exportFolder { "exportFolder" };
+        const juce::Identifier presetName   { "presetName" };
     }
 
     constexpr int currentStateVersion = 4;
@@ -119,6 +120,7 @@ IDGemsSlicerProcessor::IDGemsSlicerProcessor()
     mutateOnParam   = p ("mutateOn");
     mutateBarsParam = p ("mutateBars");
     randomManager = std::make_unique<idg::RandomManager> (apvts, patternStore, sampleManager);
+    undoHistory = std::make_unique<idg::UndoHistory> (*this, patternStore, mapStore, sampleManager);
 
     apvts.state.setProperty (IDs::editorWidth,  baseWidth,  nullptr);
     apvts.state.setProperty (IDs::editorHeight, baseHeight, nullptr);
@@ -649,6 +651,18 @@ void IDGemsSlicerProcessor::handleMidi (const juce::MidiMessage& m, int offset)
 {
     const bool seqOn = seqOnParam->load() > 0.5f;
 
+    // Banque de patterns : notes C-2 a G-2 (0 a 7) ou Program Change 1 a 8
+    if ((m.isNoteOnOrOff() && m.getNoteNumber() < idg::numPatterns) || m.isProgramChange())
+    {
+        if (m.isNoteOn() || m.isProgramChange())
+        {
+            patternStore.selectPattern ((m.isProgramChange() ? m.getProgramChangeNumber() : m.getNoteNumber()) % idg::numPatterns);
+            pattern = patternBank[(size_t) patternStore.getCurrentIndex()];
+            patternIndexUsed = patternStore.getCurrentIndex();
+        }
+        return;
+    }
+
     if (m.isNoteOn())
     {
         midiActivityCounter.fetch_add (1, std::memory_order_relaxed);
@@ -764,7 +778,16 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     liveParams.freezePosition = freezePosParam->load() * 0.01f;
     liveParams.freezeSeconds = freezeSizeParam->load() * 0.001f;
     liveParams.freezeFade = freezeFadeParam->load() * 0.01f;
-    patternStore.pull (pattern, patternVersion);
+    {
+        const int before = patternVersion;
+        patternStore.pull (patternBank, patternVersion);
+        const int idx = patternStore.getCurrentIndex();
+        if (before != patternVersion || idx != patternIndexUsed)
+        {
+            pattern = patternBank[(size_t) idx];
+            patternIndexUsed = idx;
+        }
+    }
     mapStore.pull (mapPath, mapPathVersion);
     sampleManager.pullSpreadTable (spreadTable, spreadVersion);
 
@@ -935,7 +958,8 @@ void IDGemsSlicerProcessor::setExportFolder (const juce::File& f)
 void IDGemsSlicerProcessor::prepareOfflineCopy (IDGemsSlicerProcessor& src)
 {
     apvts.replaceState (src.apvts.copyState());
-    patternStore.setPattern (src.patternStore.get());
+    patternStore.setBank (src.patternStore.getBank());
+    patternStore.selectPattern (src.patternStore.getCurrentIndex());
     mapStore.setPath (src.mapStore.get());
     setFxOrder (src.getFxOrder());
     sampleManager.adoptFrom (src.sampleManager);
@@ -992,65 +1016,81 @@ void IDGemsSlicerProcessor::setUiProperty (const juce::Identifier& id, int value
 }
 
 //==============================================================================
-void IDGemsSlicerProcessor::getStateInformation (juce::MemoryBlock& destData)
+juce::ValueTree IDGemsSlicerProcessor::createStateTree()
 {
     auto state = apvts.copyState();
     state.setProperty (IDs::stateVersion, currentStateVersion, nullptr);
 
-    state.removeChild (state.getChildWithName (IDs::slots), nullptr);
-    state.removeChild (state.getChildWithName (IDs::sequencer), nullptr);
-    state.removeChild (state.getChildWithName (IDs::mapPath), nullptr);
-    state.removeChild (state.getChildWithName (IDs::random), nullptr);
+    for (auto id : { IDs::slots, IDs::sequencer, IDs::mapPath, IDs::random })
+        state.removeChild (state.getChildWithName (id), nullptr);
     state.appendChild (sampleManager.toValueTree(), nullptr);
     state.appendChild (patternStore.toValueTree(), nullptr);
     state.appendChild (mapStore.toValueTree(), nullptr);
     if (juce::MessageManager::getInstance()->isThisTheMessageThread())
         state.appendChild (randomManager->toValueTree(), nullptr);
+    return state;
+}
 
-    if (auto xml = state.createXml())
+void IDGemsSlicerProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    if (auto xml = createStateTree().createXml())
         copyXmlToBinary (*xml, destData);
+}
+
+void IDGemsSlicerProcessor::applyStateTree (juce::ValueTree tree, bool keepEditorState)
+{
+    if (! tree.hasType (apvts.state.getType())) return;
+
+    // Chargement d'un preset : on garde la fenetre et les reglages d'interface actuels
+    if (keepEditorState)
+        for (auto id : { IDs::editorWidth, IDs::editorHeight, IDs::selectedSlot, IDs::exportFolder,
+                         juce::Identifier ("selectedTab"), juce::Identifier ("recordBars"), juce::Identifier ("exportBars") })
+            if (apvts.state.hasProperty (id)) tree.setProperty (id, apvts.state.getProperty (id), nullptr);
+
+    auto slots = tree.getChildWithName (IDs::slots);
+    auto seq = tree.getChildWithName (IDs::sequencer);
+    auto path = tree.getChildWithName (IDs::mapPath);
+    auto rnd = tree.getChildWithName (IDs::random);
+    for (auto c : { slots, seq, path, rnd }) tree.removeChild (c, nullptr);
+
+    apvts.replaceState (tree);
+    if (tree.hasProperty (IDs::fxOrder))
+        setFxOrder (idg::FxChain::decodeOrder ((int) tree.getProperty (IDs::fxOrder)));
+    sampleManager.fromValueTree (slots.isValid() ? slots : juce::ValueTree (IDs::slots));
+    patternStore.fromValueTree (seq.isValid() ? seq : juce::ValueTree (IDs::sequencer));
+    mapStore.fromValueTree (path.isValid() ? path : juce::ValueTree (IDs::mapPath));
+    if (rnd.isValid())
+    {
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+            randomManager->fromValueTree (rnd);
+        else
+            juce::MessageManager::callAsync ([w = juce::WeakReference<idg::RandomManager> (randomManager.get()), rnd]
+            {
+                if (auto* rm = w.get()) rm->fromValueTree (rnd);
+            });
+    }
 }
 
 void IDGemsSlicerProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
-    {
-        if (xml->hasTagName (apvts.state.getType()))
-        {
-            auto tree = juce::ValueTree::fromXml (*xml);
-            auto slots = tree.getChildWithName (IDs::slots);
-            auto seq = tree.getChildWithName (IDs::sequencer);
-            auto path = tree.getChildWithName (IDs::mapPath);
-            auto rnd = tree.getChildWithName (IDs::random);
-            tree.removeChild (slots, nullptr);
-            tree.removeChild (seq, nullptr);
-            tree.removeChild (path, nullptr);
-            tree.removeChild (rnd, nullptr);
-            apvts.replaceState (tree);
-            if (tree.hasProperty (IDs::fxOrder))
-                setFxOrder (idg::FxChain::decodeOrder ((int) tree.getProperty (IDs::fxOrder)));
-            sampleManager.fromValueTree (slots.isValid() ? slots : juce::ValueTree (IDs::slots));
-
-            patternStore.fromValueTree (seq.isValid() ? seq : juce::ValueTree (IDs::sequencer));
-            mapStore.fromValueTree (path.isValid() ? path : juce::ValueTree (IDs::mapPath));
-            if (rnd.isValid())
-            {
-                if (juce::MessageManager::getInstance()->isThisTheMessageThread())
-                    randomManager->fromValueTree (rnd);
-                else
-                    juce::MessageManager::callAsync ([w = juce::WeakReference<idg::RandomManager> (randomManager.get()), rnd]
-                    {
-                        if (auto* rm = w.get()) rm->fromValueTree (rnd);
-                    });
-            }
-        }
-    }
+        applyStateTree (juce::ValueTree::fromXml (*xml), false);
 
     if (auto* ed = dynamic_cast<IDGemsSlicerEditor*> (getActiveEditor()))
         juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<IDGemsSlicerEditor> (ed)]
         {
             if (safe != nullptr) safe->restoreSavedSize();
         });
+}
+
+juce::String IDGemsSlicerProcessor::getPresetName() const
+{
+    return apvts.state.getProperty (IDs::presetName, "Init").toString();
+}
+
+void IDGemsSlicerProcessor::setPresetName (const juce::String& n)
+{
+    apvts.state.setProperty (IDs::presetName, n, nullptr);
 }
 
 //==============================================================================
