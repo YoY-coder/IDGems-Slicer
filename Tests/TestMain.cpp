@@ -810,6 +810,42 @@ void runTests (const juce::String& snapshotPath)
                "undo : annule aussi une modification de lane");
     }
 
+    // 15. Taille de la fenetre : fermer / rouvrir l'editeur, puis recharger le projet
+    {
+        const auto sizes = onMessageThread ([&]
+        {
+            std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
+            ed->setSize (1600, 1000);
+            proc->editorBeingDeleted (ed.get());
+            ed.reset();
+
+            std::unique_ptr<juce::AudioProcessorEditor> ed2 (proc->createEditor());   // reouverture
+            const auto reopened = ed2->getBounds().getBottomRight();
+            proc->editorBeingDeleted (ed2.get());
+            ed2.reset();
+
+            juce::MemoryBlock st;
+            proc->getStateInformation (st);
+            std::unique_ptr<IDGemsSlicerProcessor> other (new IDGemsSlicerProcessor());
+            other->setStateInformation (st.getData(), (int) st.getSize());
+            std::unique_ptr<juce::AudioProcessorEditor> ed3 (other->createEditor());   // projet recharge
+            const auto reloaded = ed3->getBounds().getBottomRight();
+            other->editorBeingDeleted (ed3.get());
+            ed3.reset();
+            other.reset();
+
+            // remet la taille de reference pour la capture
+            std::unique_ptr<juce::AudioProcessorEditor> ed4 (proc->createEditor());
+            ed4->setSize (1280, 800);
+            proc->editorBeingDeleted (ed4.get());
+            return std::make_pair (reopened, reloaded);
+        });
+        check (sizes.first == juce::Point<int> (1600, 1000), "fenetre : meme taille apres fermeture / reouverture ("
+                                                               + juce::String (sizes.first.x) + "x" + juce::String (sizes.first.y) + ")");
+        check (sizes.second == juce::Point<int> (1600, 1000), "fenetre : meme taille apres rechargement du projet ("
+                                                                + juce::String (sizes.second.x) + "x" + juce::String (sizes.second.y) + ")");
+    }
+
     // 9. Capture de l'interface
     if (snapshotPath.isNotEmpty())
     {
