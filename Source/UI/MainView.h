@@ -6,6 +6,7 @@
 #include "SliceEditor.h"
 #include "PlayPanel.h"
 #include "SequencerView.h"
+#include "MapView.h"
 
 class IDGemsSlicerProcessor;
 
@@ -48,8 +49,9 @@ private:
     std::array<std::unique_ptr<SlotPanel>, 4> slotPanels;
     SliceEditor sliceEditor;
     SequencerView sequencerView;
+    MapView mapView;
     PlayPanel playPanel;
-    juce::TextButton cutTab { "DECOUPE" }, seqTab { "SEQUENCEUR" };
+    juce::TextButton cutTab { "DECOUPE" }, seqTab { "SEQUENCEUR" }, mapTab { "CARTE" };
     int currentTab = 0;
     juce::Rectangle<int> tabArea;
 

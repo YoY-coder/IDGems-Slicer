@@ -5,6 +5,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <set>
 
 namespace
 {
@@ -158,6 +159,7 @@ void runTests (const juce::String& snapshotPath)
 
     // 5. Manuel
     onMessageThread ([&] { sm.setManualCuts (0, { 0, 44100, 88200, 132300 }); });
+    waitFor ([&] { return sm.getSlot (0).data->numSlices() == 4; });
     check (onMessageThread ([&] { return sm.getSlot (0).data->numSlices() == 4
                                        && sm.getSlot (0).settings.mode == idg::SliceMode::manual; }),
            "manuel : 4 marqueurs");
@@ -216,6 +218,7 @@ void runTests (const juce::String& snapshotPath)
     {
         setParam (*proc, "keySource", 1.0f);   // force Sample 1
         setParam (*proc, "playMode", 1.0f);
+        setParam (*proc, "selectMode", 0.0f);   // Slice Select lineaire
         const int n0 = onMessageThread ([&] { return sm.getSlot (0).data->numSlices(); });
         setParam (*proc, "sliceSelect", 100.0f);
         renderNote (*proc, 72, 2);
@@ -223,6 +226,67 @@ void runTests (const juce::String& snapshotPath)
         setParam (*proc, "sliceSelect", 0.0f);
         renderNote (*proc, 50, 2);
         check (proc->lastTriggerSlice.load() == 0, "Scan 0 % : premiere slice, quelle que soit la note");
+    }
+
+    // 8b. Analyse des slices + carte
+    {
+        // Sample A : frappes de 110 / 137.5 / 165 / 192.5 Hz en boucle
+        const auto d = onMessageThread ([&] { return sm.getSlot (0).data; });
+        const float p0 = d->slices[0].pitchHz, p2 = d->slices[2].pitchHz;
+        if (juce::SystemStats::getEnvironmentVariable ("IDG_DEBUG", {}).isNotEmpty())
+            for (auto& sl : d->slices)
+                std::cout << "    slice " << sl.start << "-" << sl.end << " pitch " << sl.pitchHz << " cent " << sl.centroidHz << std::endl;
+        check (std::abs (p0 - 110.0f) < 4.0f && std::abs (p2 - 165.0f) < 6.0f,
+               "hauteur estimee : slice 1 = " + juce::String (p0, 1) + " Hz (110), slice 3 = " + juce::String (p2, 1) + " Hz (165)");
+        const auto dB = onMessageThread ([&] { return sm.getSlot (1).data; });
+        check (dB->slices[0].features[idg::featBrightness] > d->slices[0].features[idg::featBrightness],
+               "brillance : sample a 330 Hz plus brillant que sample a 110 Hz");
+
+        // Carte : axe X = hauteur ; curseur pose sur la hauteur de la slice 3 -> une slice de meme note
+        setParam (*proc, "selectMode", 1.0f);
+        setParam (*proc, "mapAxisX", (float) idg::featPitch);
+        setParam (*proc, "mapAxisY", (float) idg::featEnergy);
+        setParam (*proc, "mapRadius", 0.0f);
+        setParam (*proc, "mapSpread", 0.0f);
+        setParam (*proc, "mapX", d->slices[2].features[idg::featPitch] * 100.0f);
+        setParam (*proc, "mapY", d->slices[2].features[idg::featEnergy] * 100.0f);
+        renderNote (*proc, 60, 2);
+        const int picked = proc->lastTriggerSlice.load();
+        check (std::abs (d->slices[(size_t) picked].pitchHz - 165.0f) < 6.0f,
+               "carte : la slice jouee est la plus proche du curseur (slice " + juce::String (picked + 1) + ")");
+
+        // Meme chose avec l'etalement (rangs) : curseur pose sur les coordonnees etalees de la slice 3
+        setParam (*proc, "mapSpread", 1.0f);
+        const auto spread = onMessageThread ([&] { return sm.getSpreadTable().values[0][2]; });
+        setParam (*proc, "mapX", spread[idg::featPitch] * 100.0f);
+        setParam (*proc, "mapY", spread[idg::featEnergy] * 100.0f);
+        renderNote (*proc, 60, 2);
+        const int picked2 = proc->lastTriggerSlice.load();
+        check (std::abs (d->slices[(size_t) picked2].pitchHz - 165.0f) < 6.0f,
+               "carte etalee : la slice jouee est la plus proche du curseur (slice " + juce::String (picked2 + 1) + ")");
+
+        // Rayon : plus de diversite
+        setParam (*proc, "mapRadius", 50.0f);
+        std::set<int> seen;
+        for (int i = 0; i < 60; ++i) { renderNote (*proc, 60, 1); seen.insert (proc->lastTriggerSlice.load()); }
+        check (seen.size() > 4, "carte : grand rayon = slices variees (" + juce::String ((int) seen.size()) + " differentes)");
+        setParam (*proc, "mapRadius", 0.0f);
+
+        // Trajet
+        idg::MapPath path;
+        path.points[0] = { 0.0f, 0.0f };
+        path.points[1] = { 1.0f, 1.0f };
+        path.count = 2;
+        const auto mid = path.at (0.5f);
+        check (std::abs (mid.x - 0.5f) < 0.01f && std::abs (mid.y - 0.5f) < 0.01f, "trajet : position a mi-parcours");
+        onMessageThread ([&] { proc->getMapStore().setPath (path); });
+        setParam (*proc, "pathOn", 1.0f);
+        renderNote (*proc, 60, 2);
+        check (proc->cursorX.load() >= 0.0f && proc->cursorX.load() <= 1.0f, "trajet : le curseur suit le trace");
+        setParam (*proc, "pathOn", 0.0f);
+        setParam (*proc, "selectMode", 0.0f);
+        setParam (*proc, "playMode", 0.0f);
+        setParam (*proc, "keySource", 0.0f);
     }
 
     // 9. Mode Accord
@@ -289,6 +353,7 @@ void runTests (const juce::String& snapshotPath)
 
     // 11. Sauvegarde / rechargement (slices identiques)
     onMessageThread ([&] { sm.setManualCuts (1, { 0, 10000, 30000, 70000, 150000 }); });
+    waitFor ([&] { return sm.getSlot (1).data->numSlices() == 5; });
     juce::MemoryBlock state;
     onMessageThread ([&] { proc->getStateInformation (state); });
     std::unique_ptr<IDGemsSlicerProcessor> proc2 (onMessageThread ([] { return new IDGemsSlicerProcessor(); }));
@@ -305,8 +370,9 @@ void runTests (const juce::String& snapshotPath)
     });
     check (sameCuts, "slices manuelles conservees apres rechargement");
     check (onMessageThread ([&] { return sm2.getSlot (1).settings.mode == idg::SliceMode::manual; }), "mode conserve");
-    check (onMessageThread ([&] { return proc2->getPatternStore().get().lanes[idg::laneSample].values[0] == 2.0f; }),
+    check (onMessageThread ([&] { return juce::approximatelyEqual (proc2->getPatternStore().get().lanes[idg::laneSample].values[0], 2.0f); }),
            "pattern du sequenceur conserve");
+    check (onMessageThread ([&] { return proc2->getMapStore().get().count == 2; }), "trajet de la carte conserve");
 
     // 9. Capture de l'interface
     if (snapshotPath.isNotEmpty())
@@ -315,10 +381,13 @@ void runTests (const juce::String& snapshotPath)
         waitFor ([&] { return sm.isLoaded (2); });
         renderNote (*proc, 40, 3);
         onMessageThread ([&] { juce::Random r (7); proc->getPatternStore().randomiseAll (r); });
-        for (const char* tab : { "decoupe", "sequenceur" })
+        setParam (*proc, "selectMode", 1.0f);
+        setParam (*proc, "mapAxisX", 0.0f);
+        setParam (*proc, "mapAxisY", 1.0f);
+        for (const char* tab : { "decoupe", "sequenceur", "carte" })
         onMessageThread ([&]
         {
-            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : 0);
+            proc->setUiProperty ("selectedTab", juce::String (tab) == "sequenceur" ? 1 : juce::String (tab) == "carte" ? 2 : 0);
             std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
             ed->setSize (1280, 800);
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);

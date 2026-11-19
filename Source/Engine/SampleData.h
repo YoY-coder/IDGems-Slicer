@@ -2,6 +2,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
+#include <array>
 
 namespace idg
 {
@@ -37,10 +38,16 @@ namespace idg
     };
 
     //==========================================================================
+    // Caracteristiques analysees de chaque slice (normalisees 0..1) : axes de la carte
+    enum Feature { featBrightness = 0, featLength, featEnergy, featTonality, featPitch, numFeatures };
+
     struct Slice
     {
         int start = 0, end = 0;     // en samples du fichier
         float normGain = 1.0f;      // gain de normalisation (applique si option active)
+        std::array<float, numFeatures> features { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f };
+        float pitchHz = 0.0f;       // 0 = pas de hauteur detectee
+        float centroidHz = 0.0f;
     };
 
     //==========================================================================

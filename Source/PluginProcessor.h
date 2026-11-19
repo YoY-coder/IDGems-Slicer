@@ -6,6 +6,7 @@
 #include "Engine/VoiceEngine.h"
 #include "Engine/Router.h"
 #include "Engine/Sequencer.h"
+#include "Engine/MapStore.h"
 
 //==============================================================================
 // IDGems Slicer - moteur audio.
@@ -68,6 +69,10 @@ public:
     idg::SampleManager& getSampleManager() noexcept { return sampleManager; }
     const idg::VoiceEngine& getVoiceEngine() const noexcept { return engine; }
     idg::PatternStore& getPatternStore() noexcept { return patternStore; }
+    idg::MapStore& getMapStore() noexcept { return mapStore; }
+
+    // Position effective du curseur sur la carte (pour l'affichage)
+    std::atomic<float> cursorX { 0.5f }, cursorY { 0.5f };
 
     void requestPreview (int slot, int slice);
     std::array<float, idg::numSlots> getProbabilities() const noexcept;
@@ -120,6 +125,9 @@ private:
     double stepBeat (juce::int64 step) const noexcept;
     double beatAt (int offsetInBlock) const noexcept { return blockStartBeat + offsetInBlock * beatsPerSample; }
     void startSequencer (int offsetInBlock);
+    juce::Point<float> computeMapCursor (const TriggerRequest&, double beat) noexcept;
+    float pathPhase (double beat) noexcept;
+    int pickMapSlice (const idg::SampleData&, juce::Point<float> cursor) noexcept;
     void stopSequencer();
 
     //== Etat ==================================================================
@@ -128,6 +136,11 @@ private:
     std::atomic<double> hostBpm { 120.0 };
     idg::SampleManager sampleManager { [this] { return hostBpm.load(); } };
     idg::PatternStore patternStore;
+    idg::MapStore mapStore;
+    idg::MapPath mapPath;          // copie audio du trajet
+    idg::FeatureTable spreadTable; // copie audio des caracteristiques etalees
+    int spreadVersion = 0;
+    int mapPathVersion = 0;
     idg::VoiceEngine engine;
     idg::Router router;
     std::array<idg::SampleData::Ptr, idg::numSlots> audioSlots;   // cache du thread audio
@@ -166,7 +179,10 @@ private:
                        *playModeParam = nullptr, *sliceSelectParam = nullptr, *scanRandomParam = nullptr,
                        *velToScanParam = nullptr, *wheelToScanParam = nullptr, *pitchFollowParam = nullptr,
                        *chordCountParam = nullptr, *chordSpreadParam = nullptr, *chordStepParam = nullptr,
-                       *seqOnParam = nullptr, *seqRateParam = nullptr, *swingParam = nullptr, *grooveParam = nullptr;
+                       *seqOnParam = nullptr, *seqRateParam = nullptr, *swingParam = nullptr, *grooveParam = nullptr,
+                       *selectModeParam = nullptr, *mapXParam = nullptr, *mapYParam = nullptr, *mapRadiusParam = nullptr,
+                       *mapAxisXParam = nullptr, *mapAxisYParam = nullptr, *pathOnParam = nullptr,
+                       *pathLengthParam = nullptr, *pathModeParam = nullptr, *mapSpreadParam = nullptr;
 
     // Pre-ecoute (interface -> audio), sans allocation
     struct PreviewRequest { int slot, slice; };

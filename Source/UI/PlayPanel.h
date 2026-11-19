@@ -42,9 +42,9 @@ private:
 
     IDGemsSlicerProcessor& processor;
 
-    juce::ComboBox modeBox, sourceBox;
-    juce::Label modeLabel, sourceLabel;
-    std::unique_ptr<ComboAtt> modeAtt, sourceAtt;
+    juce::ComboBox modeBox, sourceBox, selectBox;
+    juce::Label modeLabel, sourceLabel, selectLabel;
+    std::unique_ptr<ComboAtt> modeAtt, sourceAtt, selectAtt;
 
     std::vector<std::pair<juce::String, std::unique_ptr<Row>>> rows;
 

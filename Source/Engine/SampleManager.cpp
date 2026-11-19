@@ -1,4 +1,5 @@
 #include "SampleManager.h"
+#include "SliceAnalysis.h"
 
 namespace idg
 {
@@ -136,6 +137,7 @@ void SampleManager::startJob (int slot, juce::File fileToLoad, std::vector<int> 
             result->audio = audio;
             auto cuts = useManualCuts ? manualCuts : Slicer::computeCuts (*audio, settings, bpm);
             result->slices = Slicer::buildSlices (*audio, std::move (cuts));
+            analyseSlices (*audio, result->slices);   // pour la carte des slices
         }
 
         juce::MessageManager::callAsync ([weak, slot, gen, result, error]
@@ -166,6 +168,7 @@ void SampleManager::applyResult (int slot, int generation, SampleData::Ptr resul
         }
     }
     publish (slot, result);
+    rebuildSpreadTable();
     sendChangeMessage();
 }
 
@@ -176,6 +179,64 @@ void SampleManager::publish (int slot, SampleData::Ptr d)
 
     const juce::SpinLock::ScopedLockType sl (audioLock);
     published[(size_t) slot] = d;
+}
+
+void SampleManager::rebuildSpreadTable()
+{
+    // Pour chaque caracteristique : rang de chaque slice parmi toutes les slices chargees
+    std::array<SampleData::Ptr, numSlots> datas;
+    {
+        const juce::ScopedLock sl (lock);
+        for (int i = 0; i < numSlots; ++i) datas[(size_t) i] = slots[(size_t) i].data;
+    }
+
+    FeatureTable t;
+    std::vector<std::pair<float, std::pair<int, int>>> all;
+    for (int f = 0; f < numFeatures; ++f)
+    {
+        all.clear();
+        for (int s = 0; s < numSlots; ++s)
+            if (datas[(size_t) s] != nullptr)
+                for (int i = 0; i < datas[(size_t) s]->numSlices(); ++i)
+                    all.push_back ({ datas[(size_t) s]->slices[(size_t) i].features[(size_t) f], { s, i } });
+
+        std::stable_sort (all.begin(), all.end(), [] (auto& a, auto& b) { return a.first < b.first; });
+        const float denom = (float) juce::jmax (1, (int) all.size() - 1);
+        for (size_t k = 0; k < all.size(); ++k)
+        {
+            // valeurs egales : meme rang (moyenne)
+            size_t j = k;
+            while (j + 1 < all.size() && juce::approximatelyEqual (all[j + 1].first, all[k].first)) ++j;
+            const float rank = all.size() > 1 ? (float) (k + j) * 0.5f / denom : 0.5f;
+            for (size_t m = k; m <= j; ++m)
+                t.values[(size_t) all[m].second.first][(size_t) all[m].second.second][(size_t) f] = rank;
+            k = j;
+        }
+    }
+    for (int s = 0; s < numSlots; ++s)
+    {
+        t.counts[(size_t) s] = datas[(size_t) s] != nullptr ? datas[(size_t) s]->numSlices() : 0;
+        t.owners[(size_t) s] = datas[(size_t) s].get();
+    }
+
+    spreadEdit = t;
+    {
+        const juce::SpinLock::ScopedLockType sl (spreadLock);
+        spreadShared = t;
+    }
+    spreadVersion.fetch_add (1);
+}
+
+void SampleManager::pullSpreadTable (FeatureTable& dest, int& lastVersion) noexcept
+{
+    const int v = spreadVersion.load();
+    if (v == lastVersion) return;
+    const juce::SpinLock::ScopedTryLockType sl (spreadLock);
+    if (sl.isLocked())
+    {
+        dest = spreadShared;
+        lastVersion = v;
+    }
 }
 
 void SampleManager::updateAudioCache (std::array<SampleData::Ptr, numSlots>& cache) noexcept
@@ -235,6 +296,7 @@ void SampleManager::clearSlot (int slot)
         s.error = {};
     }
     publish (slot, nullptr);
+    rebuildSpreadTable();
     sendChangeMessage();
 }
 
@@ -271,19 +333,14 @@ void SampleManager::rerollRandom (int slot)
 void SampleManager::setManualCuts (int slot, std::vector<int> cuts)
 {
     if (! juce::isPositiveAndBelow (slot, numSlots)) return;
-    SampleData::Ptr result;
-    int gen;
     {
         const juce::ScopedLock sl (lock);
         auto& s = slots[(size_t) slot];
         if (s.data == nullptr) return;
         s.settings.mode = SliceMode::manual;
-        result = new SampleData();
-        result->audio = s.data->audio;
-        result->slices = Slicer::buildSlices (*result->audio, std::move (cuts));  // rapide (apercu precalcule)
-        gen = ++generations[(size_t) slot];
     }
-    applyResult (slot, gen, result, {});
+    // Decoupe + analyse en arriere-plan (l'audio deja charge est reutilise)
+    startJob (slot, {}, std::move (cuts), true);
 }
 
 SampleManager::SlotInfo SampleManager::getSlot (int slot) const

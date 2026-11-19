@@ -67,6 +67,13 @@ PlayPanel::PlayPanel (IDGemsSlicerProcessor& p) : processor (p)
     pitchFollowAtt = std::make_unique<ButtonAtt> (apvts, "pitchFollow", pitchFollowToggle);
 
     // Scan
+    setupLabel (selectLabel, "SOURCE SCAN", *this);
+    selectBox.addItemList ({ "Lineaire (curseur)", "Carte (XY)" }, 1);
+    selectBox.setTooltip ("Lineaire : SLICE SELECT parcourt les slices dans l'ordre.\n"
+                          "Carte : la slice jouee est la plus proche du curseur sur la carte (onglet CARTE).");
+    addAndMakeVisible (selectBox);
+    selectAtt = std::make_unique<ComboAtt> (apvts, "selectMode", selectBox);
+
     auto& sel = addSlider ("sliceSelect", "SLICE SELECT",
                            "Position de lecture : 0 % = premiere slice, 100 % = derniere (dans le sample choisi par l'aiguillage). "
                            "Automatisable dans Ableton.");
@@ -85,12 +92,14 @@ PlayPanel::PlayPanel (IDGemsSlicerProcessor& p) : processor (p)
         findRow (id)->slider->setDoubleClickReturnValue (true, 0.0);
 
     apvts.addParameterListener ("playMode", this);
+    apvts.addParameterListener ("selectMode", this);
     updateEnablement();
 }
 
 PlayPanel::~PlayPanel()
 {
     processor.getAPVTS().removeParameterListener ("playMode", this);
+    processor.getAPVTS().removeParameterListener ("selectMode", this);
 }
 
 juce::Slider& PlayPanel::addSlider (const juce::String& paramId, const juce::String& label, const juce::String& tooltip)
@@ -138,6 +147,10 @@ void PlayPanel::updateEnablement()
         r->slider->setAlpha (mode == 2 ? 1.0f : 0.4f);
     }
     pitchFollowToggle.setEnabled (scanLike);
+    selectBox.setEnabled (scanLike);
+    const bool linear = selectBox.getSelectedItemIndex() == 0;
+    findRow ("sliceSelect")->slider->setEnabled (scanLike && linear);
+    findRow ("sliceSelect")->slider->setAlpha (scanLike && linear ? 1.0f : 0.4f);
 }
 
 void PlayPanel::tick (const std::array<float, 4>& p, const std::array<bool, 4>& loaded)
@@ -211,6 +224,7 @@ void PlayPanel::resized()
 
     scanHeader = r.removeFromTop (16);
     r.removeFromTop (4);
+    line (selectLabel, selectBox);
     sliderLine ("sliceSelect");
     sliderLine ("scanRandom");
     halfLine ("velToScan", "wheelToScan");
@@ -221,9 +235,9 @@ void PlayPanel::resized()
     sliderLine ("chordSpread");
 
     r.removeFromTop (4);
-    distributionArea = r.removeFromTop (42);
+    distributionArea = r.removeFromTop (40);
     r.removeFromTop (4);
-    lastTriggerArea = r.removeFromTop (36);
+    lastTriggerArea = r.removeFromTop (34);
 }
 
 void PlayPanel::paint (juce::Graphics& g)

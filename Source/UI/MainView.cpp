@@ -4,7 +4,7 @@
 #include "../PluginProcessor.h"
 
 MainView::MainView (IDGemsSlicerProcessor& p)
-    : processor (p), sliceEditor (p), sequencerView (p), playPanel (p)
+    : processor (p), sliceEditor (p), sequencerView (p), mapView (p), playPanel (p)
 {
     for (int i = 0; i < 4; ++i)
     {
@@ -14,10 +14,11 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     }
     addChildComponent (sliceEditor);
     addChildComponent (sequencerView);
+    addChildComponent (mapView);
     addAndMakeVisible (playPanel);
 
     int tabIndex = 0;
-    for (auto* b : { &cutTab, &seqTab })
+    for (auto* b : { &cutTab, &seqTab, &mapTab })
     {
         b->setRadioGroupId (1001);
         b->setClickingTogglesState (false);
@@ -27,6 +28,7 @@ MainView::MainView (IDGemsSlicerProcessor& p)
     }
     cutTab.setTooltip ("Decoupe du sample selectionne");
     seqTab.setTooltip ("Sequenceur polyrythmique (une lane par parametre)");
+    mapTab.setTooltip ("Carte des slices des 4 samples (Slice Select XY, trajets)");
     processor.getSampleManager().addChangeListener (this);
 
     setSize (IDGemsSlicerProcessor::baseWidth, IDGemsSlicerProcessor::baseHeight);
@@ -70,10 +72,12 @@ void MainView::selectSlot (int s)
 
 void MainView::selectTab (int t)
 {
-    currentTab = juce::jlimit (0, 1, t);
+    currentTab = juce::jlimit (0, 2, t);
     processor.setUiProperty ("selectedTab", currentTab);
     cutTab.setToggleState (currentTab == 0, juce::dontSendNotification);
     seqTab.setToggleState (currentTab == 1, juce::dontSendNotification);
+    mapTab.setToggleState (currentTab == 2, juce::dontSendNotification);
+    mapView.setVisible (currentTab == 2);
     sliceEditor.setVisible (currentTab == 0);
     sequencerView.setVisible (currentTab == 1);
     if (currentTab == 1) sequencerView.refresh();
@@ -83,6 +87,7 @@ void MainView::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     for (auto& sp : slotPanels) sp->refresh();
     sliceEditor.refresh();
+    mapView.refresh();
 }
 
 //==============================================================================
@@ -147,9 +152,12 @@ void MainView::resized()
         cutTab.setBounds (t.removeFromLeft (130));
         t.removeFromLeft (4);
         seqTab.setBounds (t.removeFromLeft (130));
+        t.removeFromLeft (4);
+        mapTab.setBounds (t.removeFromLeft (130));
         m.removeFromTop (4);
         sliceEditor.setBounds (m);
         sequencerView.setBounds (m);
+        mapView.setBounds (m);
     }
     playPanel.setBounds (fxArea);
 
@@ -381,5 +389,6 @@ void MainView::timerCallback()
     for (int i = 0; i < 4; ++i) slotPanels[(size_t) i]->tick (probs[(size_t) i]);
     if (sliceEditor.isVisible()) sliceEditor.tick();
     if (sequencerView.isVisible()) sequencerView.tick();
+    if (mapView.isVisible()) mapView.tick();
     playPanel.tick (probs, loaded);
 }

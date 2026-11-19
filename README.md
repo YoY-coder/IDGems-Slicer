@@ -3,7 +3,7 @@
 Plugin instrument VST3 (MIDI → audio) de la famille IDGems : découpe de gros bounces de sound design
 en slices, jouées et séquencées au MIDI avec beaucoup de random.
 
-**État actuel : étapes 1 à 4 / 10**
+**État actuel : étapes 1 à 5 / 10**
 - 4 emplacements de samples (glisser-déposer ou bouton CHARGER), chacun avec sa couleur.
 - Découpe : transitoires (sensibilité), grille calée sur le tempo (1/4 à 1/64), parts égales,
   aléatoire (bouton RE-SLICE RANDOM), manuel (marqueurs à la souris). 16 à 256 slices.
@@ -18,7 +18,13 @@ en slices, jouées et séquencées au MIDI avec beaucoup de random.
   1/4 à 1/64 (et triolets), swing, groove. 11 lanes (Sample, Slice, Pitch, Reverse, Gate, Start,
   Vélocité, Ratchet, Proba, Freeze, Envoi FX), chacune avec sa longueur (polyrythmie),
   dessinable à la souris et randomisable.
-- Tout est sauvegardé avec le projet Ableton (chemins des fichiers, slices exactes, pattern, réglages).
+- Analyse automatique de chaque slice : brillance, longueur, énergie, tonal/bruit, hauteur estimée.
+- Carte des slices (onglet CARTE) : les slices des 4 samples en points colorés, axes au choix,
+  option ÉTALER. En mode Scan avec la source « Carte (XY) », la slice jouée est la plus proche
+  du curseur dans le sample choisi par l'aiguillage ; rayon réglable (plus grand = plus aléatoire).
+  Trajets dessinés à la souris, parcourus en rythme (aller simple, ping-pong, random).
+  Clic sur un point = pré-écoute.
+- Tout est sauvegardé avec le projet Ableton (chemins des fichiers, slices exactes, pattern, trajet, réglages).
 
 ## Compilation automatique (sans rien installer)
 Chaque envoi de code sur GitHub compile le plugin Windows et lance les tests automatiques.
@@ -83,5 +89,8 @@ S'il y a `=== ECHEC ===`, copiez tout le texte de la fenêtre et envoyez-le-moi.
 | `Source/Engine/Router.h` | Aiguillage par probabilité |
 | `Source/Engine/Sequencer.*` | Lanes, grooves, transfert du pattern vers l'audio |
 | `Source/UI/SequencerView.*` | Éditeur de lanes |
+| `Source/Engine/SliceAnalysis.*` | Analyse des slices (centroïde, platitude, YIN...) |
+| `Source/Engine/MapStore.*` | Trajets de la carte |
+| `Source/UI/MapView.*` | Carte des slices |
 | `Tests/TestMain.cpp` | Tests automatiques du moteur |
 | `Resources/Fonts/` | Votre police (.ttf / .otf) pour les titres, embarquée dans le plugin |

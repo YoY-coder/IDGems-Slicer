@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Engine/SliceAnalysis.h"
 
 namespace
 {
@@ -11,9 +12,10 @@ namespace
         const juce::Identifier selectedSlot { "selectedSlot" };
         const juce::Identifier slots        { "Slots" };
         const juce::Identifier sequencer    { "Sequencer" };
+        const juce::Identifier mapPath      { "MapPath" };
     }
 
-    constexpr int currentStateVersion = 3;
+    constexpr int currentStateVersion = 4;
     constexpr int previewNote = -2;
     constexpr int sequencerNote = -3;
     constexpr int maxChord = 8;
@@ -51,6 +53,16 @@ IDGemsSlicerProcessor::IDGemsSlicerProcessor()
     seqRateParam     = p ("seqRate");
     swingParam       = p ("swing");
     grooveParam      = p ("groove");
+    selectModeParam  = p ("selectMode");
+    mapXParam        = p ("mapX");
+    mapYParam        = p ("mapY");
+    mapRadiusParam   = p ("mapRadius");
+    mapAxisXParam    = p ("mapAxisX");
+    mapAxisYParam    = p ("mapAxisY");
+    pathOnParam      = p ("pathOn");
+    pathLengthParam  = p ("pathLength");
+    pathModeParam    = p ("pathMode");
+    mapSpreadParam   = p ("mapSpread");
 
     apvts.state.setProperty (IDs::editorWidth,  baseWidth,  nullptr);
     apvts.state.setProperty (IDs::editorHeight, baseHeight, nullptr);
@@ -119,6 +131,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout IDGemsSlicerProcessor::creat
                                                         idg::seqRateNames(), 2));
     layout.add (percent ("swing", "Swing", 0.0f, 100.0f, 0.0f));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "groove", 1 }, "Groove", idg::grooveNames(), 0));
+
+    // Carte des slices (etape 5)
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "selectMode", 1 }, "Slice Select : source",
+                                                        StringArray { "Lineaire", "Carte" }, 1));
+    layout.add (percent ("mapX", "Carte X", 0.0f, 100.0f, 50.0f));
+    layout.add (percent ("mapY", "Carte Y", 0.0f, 100.0f, 50.0f));
+    layout.add (percent ("mapRadius", "Carte : rayon", 0.0f, 50.0f, 0.0f));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "mapAxisX", 1 }, "Carte : axe X", idg::featureNames(), 0));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "mapAxisY", 1 }, "Carte : axe Y", idg::featureNames(), 1));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "pathOn", 1 }, "Trajet", false));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "pathLength", 1 }, "Trajet : duree",
+                                                        idg::pathLengthNames(), 2));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "pathMode", 1 }, "Trajet : mode",
+                                                        idg::pathModeNames(), 0));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "mapSpread", 1 }, "Carte : etaler", true));
 
     return layout;
 }
@@ -215,6 +242,12 @@ void IDGemsSlicerProcessor::buildTriggers (const TriggerRequest& r, juce::int64 
         if (r.scanOverride >= 0.0f)
             base = (base + juce::roundToInt (r.scanOverride * (float) (n - 1))) % n;
     }
+    else if (selectModeParam->load() > 0.5f)
+    {
+        // Carte : slice la plus proche du curseur, dans le sample choisi par l'aiguillage
+        const double beat = blockStartBeat + (double) (time - sampleCounter) * beatsPerSample;
+        base = pickMapSlice (*audioSlots[(size_t) slot], computeMapCursor (r, beat));
+    }
     else
     {
         float pos = r.scanOverride >= 0.0f ? r.scanOverride : sliceSelectParam->load() * 0.01f;
@@ -247,6 +280,75 @@ void IDGemsSlicerProcessor::buildTriggers (const TriggerRequest& r, juce::int64 
             t.slice = (base + k * stepBetween) % n;
             schedule (time + (juce::int64) (rep * repeatSpacing + k * spread), t);
         }
+}
+
+//==============================================================================
+// Carte des slices
+//==============================================================================
+float IDGemsSlicerProcessor::pathPhase (double beat) noexcept
+{
+    const double len = idg::pathLengthInBeats ((int) pathLengthParam->load());
+    const float u = (float) (beat / len - std::floor (beat / len));
+    switch ((int) pathModeParam->load())
+    {
+        case 1:  return u < 0.5f ? u * 2.0f : 2.0f - u * 2.0f;   // ping-pong
+        case 2:  return audioRandom.nextFloat();                  // random
+        default: return u;                                        // aller simple
+    }
+}
+
+juce::Point<float> IDGemsSlicerProcessor::computeMapCursor (const TriggerRequest& r, double beat) noexcept
+{
+    juce::Point<float> c { mapXParam->load() * 0.01f, mapYParam->load() * 0.01f };
+    const bool path = pathOnParam->load() > 0.5f && mapPath.count >= 2;
+
+    if (path)
+        c = mapPath.at (r.scanOverride >= 0.0f ? r.scanOverride : pathPhase (beat));
+    else if (r.scanOverride >= 0.0f)
+        c.x = r.scanOverride;   // lane Slice : deplacement horizontal
+
+    c.x += wheelToScanParam->load() * 0.01f * modWheel + velToScanParam->load() * 0.01f * r.velocity;
+    const float rnd = scanRandomParam->load() * 0.01f;
+    c.x += (audioRandom.nextFloat() - 0.5f) * rnd;
+    c.y += (audioRandom.nextFloat() - 0.5f) * rnd;
+    c = { juce::jlimit (0.0f, 1.0f, c.x), juce::jlimit (0.0f, 1.0f, c.y) };
+
+    cursorX.store (c.x);
+    cursorY.store (c.y);
+    return c;
+}
+
+int IDGemsSlicerProcessor::pickMapSlice (const idg::SampleData& d, juce::Point<float> c) noexcept
+{
+    const int ax = juce::jlimit (0, idg::numFeatures - 1, (int) mapAxisXParam->load());
+    const int ay = juce::jlimit (0, idg::numFeatures - 1, (int) mapAxisYParam->load());
+    const float radius = mapRadiusParam->load() * 0.01f;
+
+    int nearest = 0, numCandidates = 0;
+    float best = 1.0e9f;
+    std::array<int, idg::maxSlices> candidates;   // tableau fixe : pas d'allocation
+
+    // Caracteristiques etalees (si la table correspond bien a ce sample)
+    const std::array<std::array<float, idg::numFeatures>, idg::maxSlices>* spread = nullptr;
+    if (mapSpreadParam->load() > 0.5f)
+        for (int s = 0; s < idg::numSlots; ++s)
+            if (spreadTable.owners[(size_t) s] == &d && spreadTable.counts[(size_t) s] == d.numSlices())
+                spread = &spreadTable.values[(size_t) s];
+
+    for (int i = 0; i < d.numSlices(); ++i)
+    {
+        const auto& f = spread != nullptr ? (*spread)[(size_t) i] : d.slices[(size_t) i].features;
+        const float dx = f[(size_t) ax] - c.x, dy = f[(size_t) ay] - c.y;
+        const float dist = std::sqrt (dx * dx + dy * dy);
+        if (dist < best) { best = dist; nearest = i; }
+        if (radius > 0.0f && dist <= radius && numCandidates < (int) candidates.size())
+            candidates[(size_t) numCandidates++] = i;
+    }
+
+    // Grand rayon = plus aleatoire : tirage parmi les slices dans le cercle
+    if (numCandidates > 1)
+        return candidates[(size_t) audioRandom.nextInt (numCandidates)];
+    return nearest;
 }
 
 //==============================================================================
@@ -462,6 +564,8 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     sampleManager.updateAudioCache (audioSlots);
     patternStore.pull (pattern, patternVersion);
+    mapStore.pull (mapPath, mapPathVersion);
+    sampleManager.pullSpreadTable (spreadTable, spreadVersion);
 
     // Tempo et position de l'hote
     bool playing = false;
@@ -484,6 +588,19 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     hostPlaying = playing;
     beatsPerSample = hostBpm.load() / 60.0 / currentSampleRate;
     blockStartBeat = playing ? ppq : freeBeat;
+
+    // Affichage du curseur de la carte quand un trajet le fait bouger
+    if (pathOnParam->load() > 0.5f && mapPath.count >= 2 && (int) pathModeParam->load() != 2)
+    {
+        const auto c = mapPath.at (pathPhase (blockStartBeat));
+        cursorX.store (c.x);
+        cursorY.store (c.y);
+    }
+    else if (pathOnParam->load() < 0.5f && numHeld == 0)
+    {
+        cursorX.store (mapXParam->load() * 0.01f);
+        cursorY.store (mapYParam->load() * 0.01f);
+    }
 
     // Pre-ecoutes demandees par l'interface
     {
@@ -587,8 +704,10 @@ void IDGemsSlicerProcessor::getStateInformation (juce::MemoryBlock& destData)
 
     state.removeChild (state.getChildWithName (IDs::slots), nullptr);
     state.removeChild (state.getChildWithName (IDs::sequencer), nullptr);
+    state.removeChild (state.getChildWithName (IDs::mapPath), nullptr);
     state.appendChild (sampleManager.toValueTree(), nullptr);
     state.appendChild (patternStore.toValueTree(), nullptr);
+    state.appendChild (mapStore.toValueTree(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -603,12 +722,15 @@ void IDGemsSlicerProcessor::setStateInformation (const void* data, int sizeInByt
             auto tree = juce::ValueTree::fromXml (*xml);
             auto slots = tree.getChildWithName (IDs::slots);
             auto seq = tree.getChildWithName (IDs::sequencer);
+            auto path = tree.getChildWithName (IDs::mapPath);
             tree.removeChild (slots, nullptr);
             tree.removeChild (seq, nullptr);
+            tree.removeChild (path, nullptr);
             apvts.replaceState (tree);
             sampleManager.fromValueTree (slots.isValid() ? slots : juce::ValueTree (IDs::slots));
 
             patternStore.fromValueTree (seq.isValid() ? seq : juce::ValueTree (IDs::sequencer));
+            mapStore.fromValueTree (path.isValid() ? path : juce::ValueTree (IDs::mapPath));
         }
     }
 

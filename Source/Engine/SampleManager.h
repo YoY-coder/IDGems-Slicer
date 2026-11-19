@@ -6,6 +6,7 @@
 #include "Slicer.h"
 #include <array>
 #include <functional>
+#include <atomic>
 
 namespace idg
 {
@@ -16,6 +17,15 @@ namespace idg
 //  - Les objets publies sont gardes dans un "release pool" : le thread audio
 //    ne libere jamais de memoire.
 //==============================================================================
+// Caracteristiques "etalees" (rang parmi toutes les slices chargees, 0..1) :
+// remplit toute la carte meme quand les sons se ressemblent.
+struct FeatureTable
+{
+    std::array<std::array<std::array<float, numFeatures>, maxSlices>, numSlots> values {};
+    std::array<int, numSlots> counts {};
+    std::array<const void*, numSlots> owners {};   // SampleData d'origine (verification de coherence)
+};
+
 class SampleManager final : public juce::ChangeBroadcaster,
                             private juce::Timer
 {
@@ -43,6 +53,7 @@ public:
     void setManualCuts (int slot, std::vector<int> cuts);
 
     SlotInfo getSlot (int slot) const;
+    const FeatureTable& getSpreadTable() const noexcept { return spreadEdit; }   // thread message
     bool isLoaded (int slot) const;
 
     juce::ValueTree toValueTree() const;          // appelable depuis n'importe quel thread
@@ -51,12 +62,14 @@ public:
     //== Thread audio ==========================================================
     // Copie les pointeurs publies dans le cache du thread audio (sans blocage).
     void updateAudioCache (std::array<SampleData::Ptr, numSlots>& cache) noexcept;
+    void pullSpreadTable (FeatureTable& dest, int& lastVersion) noexcept;
 
 private:
     void timerCallback() override;
     void startJob (int slot, juce::File fileToLoad, std::vector<int> manualCuts, bool useManualCuts);
     void applyResult (int slot, int generation, SampleData::Ptr result, juce::String error);
     void publish (int slot, SampleData::Ptr);
+    void rebuildSpreadTable();
 
     std::function<double()> getBpm;
     juce::AudioFormatManager formats;
@@ -70,6 +83,10 @@ private:
     juce::SpinLock audioLock;
     std::array<SampleData::Ptr, numSlots> published;
     juce::Array<SampleData::Ptr> releasePool;
+
+    FeatureTable spreadEdit, spreadShared;
+    juce::SpinLock spreadLock;
+    std::atomic<int> spreadVersion { 1 };
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (SampleManager)
     JUCE_DECLARE_NON_COPYABLE (SampleManager)

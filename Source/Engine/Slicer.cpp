@@ -129,10 +129,26 @@ namespace
             onsets.resize ((size_t) maxCuts);
         }
 
+        // Position precise : dans la zone de la trame, on cherche la plus forte montee
+        // d'enveloppe (blocs de 32 samples), puis on garde 1,5 ms avant l'attaque.
         std::vector<int> cuts { 0 };
-        const int preRoll = (int) (a.sampleRate * 0.004);
+        const int preRoll = (int) (a.sampleRate * 0.0015);
+        constexpr int blk = 32;
         for (auto& o : onsets)
-            cuts.push_back (juce::jmax (0, o.frame * hop + N / 2 - hop - preRoll));
+        {
+            const int centre = o.frame * hop + N / 2;
+            const int from = juce::jmax (0, centre - 2 * hop), to = juce::jmin (len - blk, centre + 2 * hop);
+            int bestPos = juce::jmax (0, centre - hop);
+            float bestRise = 0.0f, prevEnv = -1.0f;
+            for (int p = from; p < to; p += blk)
+            {
+                float env = 0.0f;
+                for (int i = 0; i < blk; ++i) env = juce::jmax (env, std::abs (monoAt (a.buffer, p + i)));
+                if (prevEnv >= 0.0f && env - prevEnv > bestRise) { bestRise = env - prevEnv; bestPos = p; }
+                prevEnv = env;
+            }
+            cuts.push_back (juce::jmax (0, bestPos - preRoll));
+        }
         return cuts;
     }
 }
