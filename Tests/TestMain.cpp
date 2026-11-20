@@ -128,6 +128,14 @@ int holdNote (IDGemsSlicerProcessor& p, int note, int numBlocks, bool release = 
     return p.triggerCounter.load() - before;
 }
 
+bool IDGemsSlicerProcessor_isClean (const juce::AudioBuffer<float>& b)
+{
+    for (int c = 0; c < b.getNumChannels(); ++c)
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            if (! std::isfinite (b.getSample (c, i)) || std::abs (b.getSample (c, i)) > 2.0f) return false;
+    return true;
+}
+
 // Joue une note, la tient numBlocks blocs ; renvoie la crete de chaque bloc
 std::vector<float> blockPeaks (IDGemsSlicerProcessor& p, int note, int numBlocks)
 {
@@ -810,6 +818,45 @@ void runTests (const juce::String& snapshotPath)
                "undo : annule aussi une modification de lane");
     }
 
+    // 16. Init (garder les samples) + morph rapide sans valeur invalide
+    {
+        setParam (*proc, "freezeOn", 1.0f);
+        setParam (*proc, "cutoff", 500.0f);
+        onMessageThread ([&] { proc->getPatternStore().setValue (idg::laneGate, 0, 0.9f); proc->initialiseState (true); });
+        const auto& pat = onMessageThread ([&] { return proc->getPatternStore().get(); });
+        check (proc->getAPVTS().getRawParameterValue ("freezeOn")->load() < 0.5f
+               && std::abs (proc->getAPVTS().getRawParameterValue ("cutoff")->load() - 20000.0f) < 1.0f
+               && juce::approximatelyEqual (pat.lanes[idg::laneGate].values[0], 0.5f)
+               && sm.isLoaded (0) && proc->getPresetName() == "Init",
+               "INIT : reglages et patterns par defaut, samples gardes");
+        const float initPeak = renderNote (*proc, 36, 20);
+        check (initPeak > 0.05f, "INIT : le son revient (crete " + juce::String (initPeak, 3) + ")");
+
+        // Morph entre deux etats extremes, deplace tres vite pendant que ca joue
+        auto& rm = proc->getRandomManager();
+        setParam (*proc, "seqOn", 1.0f);
+        onMessageThread ([&] { rm.captureSnapshot (0); });
+        setParam (*proc, "randomAmount", 100.0f);
+        onMessageThread ([&] { rm.randomiseAll(); rm.captureSnapshot (3); });
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer on, none, off;
+        on.addEvent (juce::MidiMessage::noteOn (1, 40, (juce::uint8) 110), 0);
+        off.addEvent (juce::MidiMessage::noteOff (1, 40), 0);
+        proc->processBlock (buf, on);
+        bool clean = true;
+        for (int i = 0; i < 400 && clean; ++i)
+        {
+            const float x = (float) ((i * 37) % 100) / 100.0f;
+            onMessageThread ([&] { rm.applyMorph (x, 1.0f - x); });
+            proc->processBlock (buf, none);
+            clean = IDGemsSlicerProcessor_isClean (buf);
+        }
+        proc->processBlock (buf, off);
+        check (clean && proc->recoveredFromInvalidAudio.load() == 0, "morph rapide : aucun echantillon invalide, son conserve");
+        setParam (*proc, "seqOn", 0.0f);
+        onMessageThread ([&] { proc->initialiseState (true); });
+    }
+
     // 15. Taille de la fenetre : fermer / rouvrir l'editeur, puis recharger le projet
     {
         const auto sizes = onMessageThread ([&]
@@ -878,6 +925,91 @@ void runTests (const juce::String& snapshotPath)
 }
 
 //==============================================================================
+// Tete de lecture simulee (Ableton en lecture)
+struct FakePlayHead final : juce::AudioPlayHead
+{
+    double bpm = 128.0, ppq = 0.0;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        p.setBpm (bpm);
+        p.setPpqPosition (ppq);
+        p.setIsPlaying (true);
+        p.setTimeSignature (TimeSignature { 4, 4 });
+        return p;
+    }
+};
+
+// Torture : random general / morph en boucle pendant la lecture, verifie chaque echantillon
+void runFuzz (int iterations)
+{
+    const double sr = 44100.0;
+    auto fileA = makeTestWav ("idgems_fuzz_a", 110.0, 16, 1);
+    auto fileB = makeTestWav ("idgems_fuzz_b", 330.0, 24, 2);
+    std::unique_ptr<IDGemsSlicerProcessor> proc (onMessageThread ([] { return new IDGemsSlicerProcessor(); }));
+    proc->setPlayConfigDetails (0, 2, sr, 1024);
+    proc->prepareToPlay (sr, 1024);
+    FakePlayHead head;
+    proc->setPlayHead (&head);
+    auto& sm = proc->getSampleManager();
+    onMessageThread ([&] { sm.loadFile (0, fileA); sm.loadFile (1, fileB); });
+    waitFor ([&] { return sm.isLoaded (0) && sm.isLoaded (1); });
+    setParam (*proc, "seqOn", 1.0f);
+    setParam (*proc, "randomAmount", 100.0f);
+
+    juce::AudioBuffer<float> big (2, 1024);
+    juce::MidiBuffer on, none;
+    on.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 110), 0);
+    juce::Random blk (3);
+    auto process = [&] (juce::MidiBuffer& m) -> juce::AudioBuffer<float>
+    {
+        const int n = 32 + blk.nextInt (992);   // tailles de blocs variables
+        juce::AudioBuffer<float> part (big.getArrayOfWritePointers(), 2, 0, n);
+        proc->processBlock (part, m);
+        head.ppq += n / sr * head.bpm / 60.0;
+        return part;
+    };
+    process (on);
+
+    int bad = 0;
+    for (int it = 0; it < iterations && bad == 0; ++it)
+    {
+        juce::String before;
+        onMessageThread ([&]
+        {
+            if (it % 3 == 2)
+            {
+                // morph : deplacements rapides entre snapshots
+                auto& rm = proc->getRandomManager();
+                rm.captureSnapshot (it % 4);
+                proc->getAPVTS().getParameter ("morphOn")->setValueNotifyingHost (1.0f);
+                rm.applyMorph (juce::Random::getSystemRandom().nextFloat(), juce::Random::getSystemRandom().nextFloat());
+            }
+            proc->getRandomManager().randomiseAll();
+        });
+        for (int b = 0; b < 60 && bad == 0; ++b)
+        {
+            auto buf = process (none);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < buf.getNumSamples(); ++i)
+                {
+                    const float v = buf.getSample (ch, i);
+                    if (! std::isfinite (v) || std::abs (v) > 2.0f) { bad = 1; std::cout << "BAD it " << it << " block " << b << " value " << v << std::endl; break; }
+                }
+        }
+        if (bad)
+            for (auto* p : proc->getParameters())
+                if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+                    std::cout << "  " << rp->getParameterID() << " = " << rp->getCurrentValueAsText() << std::endl;
+    }
+    std::cout << "  filet de securite declenche : " << proc->recoveredFromInvalidAudio.load() << " fois" << std::endl;
+    bad += proc->recoveredFromInvalidAudio.load() > 0 ? 1 : 0;
+    std::cout << (bad ? "== FUZZ : PROBLEME ==" : "== FUZZ OK ==") << std::endl;
+    failures += bad;
+    onMessageThread ([&] { proc.reset(); });
+}
+
+//==============================================================================
 class TestApp final : public juce::JUCEApplicationBase
 {
 public:
@@ -897,9 +1029,11 @@ public:
         const int i = tokens.indexOf ("--snapshot");
         if (i >= 0 && i + 1 < tokens.size()) snap = tokens[i + 1].unquoted();
 
-        thread = std::make_unique<std::thread> ([this, snap]
+        const int fz = tokens.indexOf ("--fuzz");
+        const int fuzzN = fz >= 0 && fz + 1 < tokens.size() ? tokens[fz + 1].getIntValue() : 0;
+        thread = std::make_unique<std::thread> ([this, snap, fuzzN]
         {
-            runTests (snap);
+            if (fuzzN > 0) runFuzz (fuzzN); else runTests (snap);
             juce::MessageManager::callAsync ([this] { setApplicationReturnValue (failures == 0 ? 0 : 1); quit(); });
         });
     }

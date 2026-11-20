@@ -28,9 +28,10 @@ private:
     void loadPreset (const juce::File&);
     void savePreset();
     void showPatternMenu (int index);
+    void showInitMenu();
 
     IDGemsSlicerProcessor& processor;
-    juce::TextButton prevButton { "<" }, nextButton { ">" }, nameButton, saveButton { "SAUVER" };
+    juce::TextButton prevButton { "<" }, nextButton { ">" }, nameButton, saveButton { "SAUVER" }, initButton { "INIT" };
     juce::ToggleButton embedToggle { "+ SAMPLES" };
     std::array<juce::TextButton, 8> patternButtons;
     juce::TextButton undoButton { "UNDO" }, redoButton { "REDO" };

@@ -25,6 +25,13 @@ void Master::prepare (double sr, int maxBlockSize)
     limiterCeilingSet = 1.0e9f;
 }
 
+void Master::reset() noexcept
+{
+    for (auto* f : { &lowLP, &lowHP, &highLP, &highHP }) f->reset();
+    env.fill (0.0f);
+    limiter.reset();
+}
+
 void Master::process (juce::AudioBuffer<float>& buf, int n, const MasterParams& p) noexcept
 {
     if (buf.getNumChannels() < 2 || n <= 0 || n > dry.getNumSamples()) return;

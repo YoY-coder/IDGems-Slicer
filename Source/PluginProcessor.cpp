@@ -779,6 +779,19 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     liveParams.freezeSeconds = freezeSizeParam->load() * 0.001f;
     liveParams.freezeFade = freezeFadeParam->load() * 0.01f;
     {
+        // Lissage des reglages de voix (filtre, drive) sur ~30 ms
+        const float k = 1.0f - std::exp (-(float) buffer.getNumSamples() / (float) (0.03 * currentSampleRate));
+        auto smooth = [k] (Smoothed& s, float target)
+        {
+            if (! s.init || ! std::isfinite (s.value)) { s.value = target; s.init = true; }
+            s.value += (target - s.value) * k;
+            return s.value;
+        };
+        liveParams.cutoff = std::exp (smooth (sCutoff, std::log (juce::jmax (20.0f, liveParams.cutoff))));
+        liveParams.resonance = smooth (sReso, liveParams.resonance);
+        liveParams.drive = smooth (sDrive, liveParams.drive);
+    }
+    {
         const int before = patternVersion;
         patternStore.pull (patternBank, patternVersion);
         const int idx = patternStore.getCurrentIndex();
@@ -870,11 +883,23 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     // Chaine FX (bus d'envoi) puis retour dans la sortie
     readFxParams();
+    smoothLiveParams (numSamples);
     if (buffer.getNumChannels() >= 2)
     {
         fxChain.process (fxBus, numSamples, fxParams, { blockStartBeat, beatsPerSample });
         for (int ch = 0; ch < 2; ++ch) buffer.addFrom (ch, 0, fxBus, ch, 0, numSamples);
         master.process (buffer, numSamples, masterParams);
+    }
+
+    // Filet de securite : si une valeur invalide (NaN / infini) apparait malgre tout,
+    // on coupe ce bloc et on reinitialise les etats internes pour que le son revienne
+    if (! isBlockFinite (buffer, numSamples))
+    {
+        buffer.clear();
+        fxChain.reset();
+        master.reset();
+        engine.allNotesOff (true);
+        recoveredFromInvalidAudio.fetch_add (1);
     }
 
     // Mutate auto : une demande au thread message toutes les N mesures (4 temps)
@@ -904,7 +929,8 @@ void IDGemsSlicerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     for (int ch = 0; ch < 2; ++ch)
     {
-        const float peak = ch < buffer.getNumChannels() ? buffer.getMagnitude (ch, 0, numSamples) : 0.0f;
+        float peak = ch < buffer.getNumChannels() ? buffer.getMagnitude (ch, 0, numSamples) : 0.0f;
+        if (! std::isfinite (peak)) peak = 0.0f;
         const float prev = outputLevel[(size_t) ch].load (std::memory_order_relaxed);
         outputLevel[(size_t) ch].store (juce::jmax (peak, prev * 0.9f), std::memory_order_relaxed);
     }
@@ -975,6 +1001,37 @@ void IDGemsSlicerProcessor::setFxOrder (const std::array<int, idg::numFxModules>
     const int v = idg::FxChain::encodeOrder (o);
     fxChain.order.store (idg::FxChain::encodeOrder (idg::FxChain::decodeOrder (v)));
     apvts.state.setProperty (IDs::fxOrder, fxChain.order.load(), nullptr);
+}
+
+void IDGemsSlicerProcessor::smoothLiveParams (int numSamples) noexcept
+{
+    // Lissage des reglages de la chaine FX et du master sur ~30 ms
+    const float k = 1.0f - std::exp (-(float) numSamples / (float) (0.03 * currentSampleRate));
+    auto smooth = [k] (Smoothed& s, float target)
+    {
+        if (! s.init || ! std::isfinite (s.value)) { s.value = target; s.init = true; }
+        s.value += (target - s.value) * k;
+        return s.value;
+    };
+    fxParams.filterCutoff = std::exp (smooth (sFxCutoff, std::log (juce::jmax (20.0f, fxParams.filterCutoff))));
+    fxParams.filterReso = smooth (sFxReso, fxParams.filterReso);
+    for (int i = 0; i < idg::numFxModules; ++i)
+        fxParams.mix[(size_t) i] = smooth (sFxMix[(size_t) i], fxParams.mix[(size_t) i]);
+    masterParams.ottDepth = smooth (sOtt, masterParams.ottDepth);
+    masterParams.mix = smooth (sMasterMix, masterParams.mix);
+}
+
+bool IDGemsSlicerProcessor::isBlockFinite (const juce::AudioBuffer<float>& b, int n) noexcept
+{
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+    {
+        const float* d = b.getReadPointer (ch);
+        float acc = 0.0f;
+        for (int i = 0; i < n; ++i) acc += d[i] * 0.0f;   // NaN ou infini contaminent la somme
+        if (! std::isfinite (acc)) return false;
+        for (int i = 0; i < n; ++i) if (std::abs (d[i]) > 1.0e6f) return false;
+    }
+    return true;
 }
 
 //==============================================================================
@@ -1081,6 +1138,28 @@ void IDGemsSlicerProcessor::setStateInformation (const void* data, int sizeInByt
         {
             if (safe != nullptr) safe->restoreSavedSize();
         });
+}
+
+void IDGemsSlicerProcessor::initialiseState (bool keepSamples)
+{
+    for (auto* p : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+        {
+            rp->beginChangeGesture();
+            rp->setValueNotifyingHost (rp->getDefaultValue());
+            rp->endChangeGesture();
+        }
+
+    patternStore.setBank (idg::PatternBank {});
+    patternStore.selectPattern (0);
+    mapStore.clear();
+    setFxOrder ({ 0, 1, 2, 3, 4 });
+
+    if (! keepSamples)
+        for (int i = 0; i < idg::numSlots; ++i)
+            sampleManager.clearSlot (i);
+
+    setPresetName ("Init");
 }
 
 juce::String IDGemsSlicerProcessor::getPresetName() const

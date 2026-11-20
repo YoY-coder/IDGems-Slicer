@@ -70,6 +70,7 @@ public:
     float getOutputLevel (int channel) const noexcept { return outputLevel[(size_t) juce::jlimit (0, 1, channel)].load(); }
 
     std::atomic<int> midiActivityCounter { 0 };
+    std::atomic<int> recoveredFromInvalidAudio { 0 };   // nombre de blocs invalides neutralises
 
     idg::SampleManager& getSampleManager() noexcept { return sampleManager; }
     const idg::VoiceEngine& getVoiceEngine() const noexcept { return engine; }
@@ -87,6 +88,8 @@ public:
     void applyStateTree (juce::ValueTree tree, bool keepEditorState);
     idg::UndoHistory& getUndoHistory() noexcept { return *undoHistory; }
     juce::String getPresetName() const;
+    // Remet tout a zero (reglages, 8 patterns, trajet, ordre FX) ; samples gardes ou vides
+    void initialiseState (bool keepSamples);
     void setPresetName (const juce::String&);
 
     //== Resample / exports (etape 9) ==========================================
@@ -242,6 +245,13 @@ private:
     idg::FxParams fxParams;
     idg::MasterParams masterParams;
     void readFxParams() noexcept;
+    static bool isBlockFinite (const juce::AudioBuffer<float>&, int numSamples) noexcept;
+    void smoothLiveParams (int numSamples) noexcept;
+
+    // Valeurs lissees (morph, random, automation : pas de saut audible)
+    struct Smoothed { float value = 0.0f; bool init = false; };
+    Smoothed sCutoff, sReso, sDrive, sFxCutoff, sFxReso, sOtt, sMasterMix;
+    std::array<Smoothed, idg::numFxModules> sFxMix;
 
     std::atomic<float> *fxSendParam = nullptr;
     std::array<std::atomic<float>*, idg::numFxModules> fxOnParams {}, fxMixParams {};

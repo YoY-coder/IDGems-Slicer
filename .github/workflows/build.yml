@@ -68,6 +68,9 @@ jobs:
       - name: Run tests
         run: xvfb-run -a ./build/IDGemsSlicerTests --snapshot interface.png
 
+      - name: Torture (random / morph pendant la lecture)
+        run: xvfb-run -a ./build/IDGemsSlicerTests --fuzz 2000
+
       - name: Capture de l'interface
         if: always()
         uses: actions/upload-artifact@v4

@@ -195,6 +195,10 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, juce::AudioBuffer<float
         const double grainLen = juce::jlimit (32.0, (double) juce::jmax (64, sliceLen), lp.freezeSeconds * fileRate);
         const double grainStart = v.sliceStart + juce::jlimit (0.0, 1.0, (double) lp.freezePosition) * juce::jmax (0.0, sliceLen - grainLen);
         const double xfade = juce::jmax (8.0, grainLen * 0.5 * juce::jlimit (0.0f, 1.0f, lp.freezeFade));
+        // La taille du grain peut changer en cours de boucle (random, morph, automation) :
+        // on ramene toujours la position dans le nouveau grain
+        if (v.grainPhase >= grainLen || v.grainPhase < 0.0)
+            v.grainPhase = std::fmod (std::abs (v.grainPhase), grainLen);
 
         for (int n = 0; n < num; ++n)
         {
@@ -241,7 +245,7 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, juce::AudioBuffer<float
                     smp = rd.read (c, grainStart + p);
                     if (p > grainLen - xfade)
                     {
-                        const float t = (float) ((p - (grainLen - xfade)) / xfade);
+                        const float t = juce::jlimit (0.0f, 1.0f, (float) ((p - (grainLen - xfade)) / xfade));
                         smp = smp * std::sqrt (1.0f - t) + rd.read (c, grainStart + p - grainLen) * std::sqrt (t);
                     }
                 }
@@ -260,7 +264,14 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, juce::AudioBuffer<float
                     smp = std::tanh (smp * driveGain) * driveComp;
                 }
 
-                const float y = smp * g;
+                float y = smp * g;
+                if (! std::isfinite (y))
+                {
+                    // Filet de securite : une valeur invalide ne doit jamais sortir ni rester dans le filtre
+                    y = 0.0f;
+                    v.filter.reset();
+                    v.steal = 0.0f;   // la voix s'arrete au prochain echantillon
+                }
                 if (hasFx && v.fxSend > 0.0f)
                 {
                     out.addSample (ch, start + n, y * (1.0f - v.fxSend));
@@ -276,7 +287,7 @@ void VoiceEngine::render (juce::AudioBuffer<float>& out, juce::AudioBuffer<float
             if (v.freeze)
             {
                 v.grainPhase += inc;
-                if (v.grainPhase >= grainLen) v.grainPhase -= grainLen;
+                if (v.grainPhase >= grainLen) v.grainPhase = std::fmod (v.grainPhase, grainLen);
                 v.pos = grainStart + v.grainPhase;
             }
             else

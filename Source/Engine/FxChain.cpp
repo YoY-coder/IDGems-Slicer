@@ -51,6 +51,8 @@ void FxChain::reset()
     stutterOn = false; lastBeatIndex = -1; autoStutter = false; stutterFade = 0.0f;
     for (auto& g : grains) g.active = false;
     grainTimer = 0.0;
+    // Les tampons peuvent contenir des valeurs invalides : on les vide
+    for (auto* ring : { &tapeRing, &stutterRing, &grainRing }) ring->data.clear();
 }
 
 //==============================================================================

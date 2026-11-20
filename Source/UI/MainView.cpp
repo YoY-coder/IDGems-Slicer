@@ -427,8 +427,10 @@ void MainView::drawMeter (juce::Graphics& g, juce::Rectangle<float> area)
 //==============================================================================
 void MainView::timerCallback()
 {
-    const float l = processor.getOutputLevel (0);
-    const float r = processor.getOutputLevel (1);
+    float l = processor.getOutputLevel (0);
+    float r = processor.getOutputLevel (1);
+    if (! std::isfinite (l)) l = 0.0f;
+    if (! std::isfinite (r)) r = 0.0f;
     meterL = juce::jmax (l, meterL * 0.85f);
     meterR = juce::jmax (r, meterR * 0.85f);
 

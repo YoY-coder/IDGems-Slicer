@@ -17,7 +17,10 @@ HeaderBar::HeaderBar (IDGemsSlicerProcessor& p) : processor (p)
     saveButton.onClick = [this] { savePreset(); };
     embedToggle.setToggleState (processor.getUiProperty ("embedSamples", 0) != 0, juce::dontSendNotification);
     embedToggle.onClick = [this] { processor.setUiProperty ("embedSamples", embedToggle.getToggleState() ? 1 : 0); };
-    for (auto* c : std::initializer_list<juce::Component*> { &prevButton, &nextButton, &nameButton, &saveButton, &embedToggle })
+    initButton.setTooltip ("Remet le plugin a zero : tous les reglages par defaut, 8 patterns vides, effets coupes. "
+                           "Vous pouvez garder les samples charges.");
+    initButton.onClick = [this] { showInitMenu(); };
+    for (auto* c : std::initializer_list<juce::Component*> { &prevButton, &nextButton, &nameButton, &saveButton, &embedToggle, &initButton })
         addAndMakeVisible (c);
 
     for (int i = 0; i < 8; ++i)
@@ -102,9 +105,27 @@ void HeaderBar::showPatternMenu (int index)
                      });
 }
 
+void HeaderBar::showInitMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Remettre a zero (annulable avec UNDO)");
+    m.addItem (1, "Init en gardant les samples");
+    m.addItem (2, "Init complet (vide aussi les samples)");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&initButton),
+                     [this] (int r)
+                     {
+                         if (r == 0) return;
+                         processor.initialiseState (r == 1);
+                         if (onPresetLoaded) onPresetLoaded();
+                     });
+}
+
 void HeaderBar::showPresetMenu()
 {
     juce::PopupMenu m;
+    m.addItem (2000, "Init en gardant les samples");
+    m.addItem (2001, "Init complet");
+    m.addSeparator();
     const auto files = PresetManager::list (processor);
     for (int i = 0; i < files.size(); ++i)
         m.addItem (i + 1, files[i].getFileNameWithoutExtension(), true,
@@ -117,7 +138,12 @@ void HeaderBar::showPresetMenu()
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&nameButton),
                      [this, files] (int r)
                      {
-                         if (r >= 1 && r <= files.size()) loadPreset (files[r - 1]);
+                         if (r == 2000 || r == 2001)
+                         {
+                             processor.initialiseState (r == 2000);
+                             if (onPresetLoaded) onPresetLoaded();
+                         }
+                         else if (r >= 1 && r <= files.size()) loadPreset (files[r - 1]);
                          else if (r == 1000)
                          {
                              chooser = std::make_unique<juce::FileChooser> ("Charger un preset", PresetManager::folder (processor), "*.idgslicer");
@@ -167,6 +193,8 @@ void HeaderBar::resized()
     auto row1 = r.removeFromTop (r.getHeight() / 2).reduced (0, 2);
     auto row2 = r.reduced (0, 2);
 
+    initButton.setBounds (row1.removeFromLeft (46));
+    row1.removeFromLeft (6);
     prevButton.setBounds (row1.removeFromLeft (24));
     row1.removeFromLeft (3);
     embedToggle.setBounds (row1.removeFromRight (104));

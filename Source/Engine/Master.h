@@ -24,6 +24,7 @@ class Master
 public:
     void prepare (double sampleRate, int maxBlockSize);
     void process (juce::AudioBuffer<float>&, int numSamples, const MasterParams&) noexcept;
+    void reset() noexcept;
 
 private:
     double sampleRate = 44100.0;
